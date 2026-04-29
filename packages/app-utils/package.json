@@ -9,6 +9,7 @@
     "./auth": "./src/auth.ts",
     "./settings": "./src/settings.ts",
     "./dotenv": "./src/dotenv.ts",
+    "./provisioner": "./src/provisioner.ts",
     "./styles/tokens.css": "./src/styles/tokens.css",
     "./styles/base.css": "./src/styles/base.css"
   }
