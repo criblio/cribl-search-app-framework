@@ -15,9 +15,6 @@
     "test": "vitest run --passWithNoTests",
     "test:e2e": "npx playwright test"
   },
-  "navItems": [
-    { "label": "Home", "path": "/" }
-  ],
   "dependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
