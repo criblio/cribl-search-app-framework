@@ -20,3 +20,14 @@ export {
   type ActionResult,
   type HttpClient,
 } from './provisioner.js';
+export {
+  CADENCE_OPTIONS,
+  DEFAULT_CADENCE,
+  cadenceToCron,
+  getSearchCadence,
+  getSearchCadenceCron,
+  setSearchCadence,
+  subscribeSearchCadence,
+  type CadenceOption,
+  type CadenceChoice,
+} from './cadence.js';
