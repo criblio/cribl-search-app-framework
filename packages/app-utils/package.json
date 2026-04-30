@@ -23,5 +23,8 @@
     "react": {
       "optional": true
     }
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0"
   }
 }
