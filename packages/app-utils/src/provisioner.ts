@@ -257,31 +257,85 @@ function planToBody(want: ProvisionedSearch): Record<string, unknown> {
   };
 }
 
-/** Best-effort lookup seeding. Cribl validates lookup names at
+/** Run a search job synchronously: POST creates it, then we poll
+ * /jobs/<id> until it reaches a terminal state. Returns the final
+ * status string ("completed" / "failed" / etc.) or "unknown" on
+ * timeout / network error.
+ *
+ * Cribl Search jobs are async — the POST returns immediately with a
+ * job id, but the job runs in the background. The previous version of
+ * seedLookups treated POST success as "the work is done", which is
+ * wrong. The probe in seedLookups specifically needs the *eventual*
+ * job status to know whether the lookup exists. */
+async function runSearchJobSync(
+  http: HttpClient,
+  query: string,
+  earliest = '-5m',
+  latest = 'now',
+  timeoutMs = 15_000,
+): Promise<string> {
+  let jobId: string;
+  try {
+    const created = (await http.post('/m/default_search/search/jobs', {
+      query,
+      earliest,
+      latest,
+    })) as { id?: string };
+    jobId = created.id ?? '';
+  } catch {
+    return 'unknown';
+  }
+  if (!jobId) return 'unknown';
+
+  const start = Date.now();
+  // Cribl returns very fast for these tiny probe queries; 250ms
+  // intervals are short enough to feel synchronous.
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const status = (await http.get(
+        `/m/default_search/search/jobs/${encodeURIComponent(jobId)}`,
+      )) as { status?: string };
+      const s = status?.status ?? '';
+      if (s === 'completed' || s === 'failed' || s === 'canceled') {
+        return s;
+      }
+    } catch {
+      // Transient — keep polling.
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return 'unknown';
+}
+
+/** Probe-and-seed lookup creation. Cribl validates lookup names at
  * search creation, so any lookup the plan references must exist
- * first. We probe with a no-op query; if it errors, we run the
- * seed query. Failures here are swallowed because the search
- * creation step will surface a clearer error if the seed didn't
- * actually take. */
+ * first. We:
+ *
+ *   1. Probe with a no-op `| lookup <name>` query and *await* the
+ *      probe job's terminal status. The job fails iff the lookup is
+ *      missing.
+ *   2. If the probe completed, the lookup exists and we leave it
+ *      alone — important so re-provisioning doesn't overwrite a
+ *      catalog lookup that's been populated with real data by the
+ *      hourly catalog scheduled search.
+ *   3. If the probe failed (or timed out), we run the seed query and
+ *      await its completion so the next reconcile step (creating the
+ *      search that joins this lookup) sees the seeded rows.
+ *
+ * Failures are logged via the returned status but otherwise swallowed
+ * — the search-creation step will surface a clearer error if the
+ * seed didn't actually take. */
 async function seedLookups(http: HttpClient, lookups: SeedLookup[]): Promise<void> {
   for (const lookup of lookups) {
-    try {
-      await http.post('/m/default_search/search/jobs', {
-        query: `dataset="otel" | limit 1 | project x=1 | lookup ${lookup.name} on x | limit 0`,
-        earliest: '-5m',
-        latest: 'now',
-      });
-    } catch {
-      try {
-        await http.post('/m/default_search/search/jobs', {
-          query: lookup.seedQuery,
-          earliest: '-5m',
-          latest: 'now',
-        });
-      } catch {
-        // Best effort.
-      }
+    const probe = `dataset="otel" | limit 1 | project x=1 | lookup ${lookup.name} on x | limit 0`;
+    const probeStatus = await runSearchJobSync(http, probe);
+    if (probeStatus === 'completed') {
+      // Lookup exists — don't overwrite.
+      continue;
     }
+    // Either failed (lookup missing) or unknown (timeout / network).
+    // Run the seed and wait for it.
+    await runSearchJobSync(http, lookup.seedQuery);
   }
 }
 
