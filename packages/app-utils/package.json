@@ -10,7 +10,18 @@
     "./settings": "./src/settings.ts",
     "./dotenv": "./src/dotenv.ts",
     "./provisioner": "./src/provisioner.ts",
+    "./cadence": "./src/cadence.ts",
+    "./provisioning-panel": "./src/ProvisioningPanel.tsx",
+    "./cadence-picker": "./src/CadencePicker.tsx",
     "./styles/tokens.css": "./src/styles/tokens.css",
     "./styles/base.css": "./src/styles/base.css"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   }
 }
