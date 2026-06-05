@@ -38,3 +38,9 @@ export {
   useDataset,
 } from './dataset.js';
 export { DatasetProvider } from './DatasetProvider.js';
+export {
+  Banner,
+  useProvisioningBanners,
+  type ProvisioningBannerSpec,
+  type ProvisioningBannerSource,
+} from './ProvisioningBanner.js';
