@@ -17,7 +17,7 @@
 // Run from the repo root: `npm run deploy`
 
 import { spawn } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -193,6 +193,16 @@ async function main() {
   });
   console.log('▶ Install OK');
   console.log(JSON.stringify(installResp, null, 2));
+
+  // If the app ships a provisioner script, run it after install so
+  // scheduled searches + accelerated fields land in one command.
+  // Apps without one skip silently — this hook is opt-in.
+  const provisionScript = join(APP_ROOT, 'scripts', 'provision.ts');
+  const hasProvisioner = await stat(provisionScript).then(() => true).catch(() => false);
+  if (hasProvisioner) {
+    console.log('▶ Reconciling provisioned resources …');
+    await runCommand('npx', ['tsx', 'scripts/provision.ts'], APP_ROOT);
+  }
 }
 
 main().catch((err) => {

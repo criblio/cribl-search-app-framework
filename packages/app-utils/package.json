@@ -15,6 +15,7 @@
     "./cadence-picker": "./src/CadencePicker.tsx",
     "./dataset": "./src/dataset.ts",
     "./dataset-provider": "./src/DatasetProvider.tsx",
+    "./provisioning-banner": "./src/ProvisioningBanner.tsx",
     "./styles/tokens.css": "./src/styles/tokens.css",
     "./styles/base.css": "./src/styles/base.css"
   },
