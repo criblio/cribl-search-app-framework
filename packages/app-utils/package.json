@@ -10,6 +10,7 @@
     "./settings": "./src/settings.ts",
     "./dotenv": "./src/dotenv.ts",
     "./provisioner": "./src/provisioner.ts",
+    "./dataset-provisioner": "./src/dataset-provisioner.ts",
     "./cadence": "./src/cadence.ts",
     "./provisioning-panel": "./src/ProvisioningPanel.tsx",
     "./cadence-picker": "./src/CadencePicker.tsx",

@@ -44,3 +44,19 @@ export {
   type ProvisioningBannerSpec,
   type ProvisioningBannerSource,
 } from './ProvisioningBanner.js';
+export {
+  DEFAULT_SEARCH_GROUP,
+  datasetPath,
+  rulesetPath,
+  getAcceleratedFieldsStatus,
+  ensureAcceleratedFields,
+  getRulesetRuleStatus,
+  ensureRulesetRule,
+  type AcceleratedField,
+  type AcceleratedFieldsStatus,
+  type AcceleratedFieldsResult,
+  type DatasetRule,
+  type RulesetRuleStatus,
+  type RulesetRuleResult,
+  type RuleValidator,
+} from './dataset-provisioner.js';
