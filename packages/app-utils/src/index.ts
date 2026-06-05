@@ -31,3 +31,10 @@ export {
   type CadenceOption,
   type CadenceChoice,
 } from './cadence.js';
+export {
+  getCurrentDataset,
+  setCurrentDataset,
+  subscribeDataset,
+  useDataset,
+} from './dataset.js';
+export { DatasetProvider } from './DatasetProvider.js';

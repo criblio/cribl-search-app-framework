@@ -13,6 +13,8 @@
     "./cadence": "./src/cadence.ts",
     "./provisioning-panel": "./src/ProvisioningPanel.tsx",
     "./cadence-picker": "./src/CadencePicker.tsx",
+    "./dataset": "./src/dataset.ts",
+    "./dataset-provider": "./src/DatasetProvider.tsx",
     "./styles/tokens.css": "./src/styles/tokens.css",
     "./styles/base.css": "./src/styles/base.css"
   },
