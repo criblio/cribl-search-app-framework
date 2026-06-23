@@ -1,6 +1,13 @@
 /**
  * App settings via Cribl KV store.
- * Each app stores its config under a pack-scoped KV key.
+ *
+ * Each app gets its own KV namespace, scoped automatically by the
+ * platform's fetch proxy. App code calls `${apiUrl()}/kvstore/key`
+ * and the proxy rewrites to the scoped path (`/api/v1/a/{appId}/
+ * kvstore/key`) under the new app-platform conventions; under the
+ * older pack model it rewrote to `/api/v1/p/{packId}/kvstore/key`.
+ * Either way, the manual `${appId}/` segment we used to inject
+ * here was wrong — it produced double-scoped paths that failed.
  */
 
 import { apiUrl } from './search.js';
@@ -13,8 +20,7 @@ export interface AppSettings {
 const DEFAULT_SETTINGS: AppSettings = { dataset: 'otel' };
 
 function kvUrl(key: string): string {
-  const appId = window.CRIBL_APP_ID ?? '';
-  return `${apiUrl()}/kvstore/${appId}/${key}`;
+  return `${apiUrl()}/kvstore/${key}`;
 }
 
 export async function loadSettings(): Promise<AppSettings> {
