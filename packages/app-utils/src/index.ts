@@ -1,4 +1,28 @@
 export { runQuery, apiUrl } from './search.js';
+export {
+  runSearchJob,
+  SearchJobError,
+  type SearchFailureKind,
+  type SearchHttpClient,
+  type SearchJobOptions,
+} from './search-job.js';
+export {
+  KqlSafetyError,
+  assertKqlPredicate,
+  assertReadOnlyKql,
+  kqlBracketField,
+  kqlDatasetId,
+  kqlFieldKey,
+  kqlFiniteNumber,
+  kqlInteger,
+  kqlStringLiteral,
+  kqlTime,
+} from './kql.js';
+export {
+  ResilienceBoundary,
+  type ResilienceBoundaryProps,
+  type ResilienceFallbackProps,
+} from './ResilienceBoundary.js';
 export { getBearerToken, oauthEndpoints, type OAuthConfig } from './auth.js';
 export { loadSettings, saveSettings, type AppSettings } from './settings.js';
 export { loadDotEnv } from './dotenv.js';
