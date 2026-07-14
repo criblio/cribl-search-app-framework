@@ -127,6 +127,24 @@ browser TS graph. Common patterns:
 - `<ResilienceBoundary>` — router-free root/panel render containment
   with retry and an optional app-owned fallback renderer
 
+### @cribl/app-tooling
+
+Node-only commands shared by every consumer app:
+
+- `cribl-app-package` — deterministic Cribl App tgz construction
+- `cribl-app-inspect` — archive shape, manifest, static asset, and
+  optional empty-proxy policy validation
+- `cribl-app-deploy` — exact-artifact upload, server preinstall policy,
+  idempotent install/upgrade without force, and optional provisioning
+- `cribl-app-release-evidence` — checksum, source/framework metadata,
+  and deterministic production CycloneDX SBOM
+- `cribl-app-security` — SHA-pinned Action, dependency-license, and
+  tracked-secret gates
+
+The tooling package owns mechanisms. Consumer package scripts and CI
+provide app policy such as `--require-empty-proxies`, live workspace
+credentials, and the app-specific smoke spec list.
+
 ## Working in this repo
 
 The framework itself doesn't ship a CI workflow (the **skeleton**

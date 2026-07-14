@@ -1,0 +1,29 @@
+{
+  "name": "@cribl/app-tooling",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Deterministic package, deployment, release, and security tooling for Cribl Apps",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./pack": "./src/pack.mjs",
+    "./inspect": "./src/inspect.mjs",
+    "./deploy": "./src/deploy.mjs",
+    "./release-evidence": "./src/release-evidence.mjs",
+    "./security": "./src/security.mjs"
+  },
+  "bin": {
+    "cribl-app-package": "./bin/package.mjs",
+    "cribl-app-deploy": "./bin/deploy.mjs",
+    "cribl-app-inspect": "./bin/inspect.mjs",
+    "cribl-app-release-evidence": "./bin/release-evidence.mjs",
+    "cribl-app-security": "./bin/security.mjs"
+  },
+  "scripts": {
+    "test": "node --test",
+    "audit": "npm audit --audit-level=low"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "license": "MIT"
+}

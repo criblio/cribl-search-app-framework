@@ -8,9 +8,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "package": "npm run build && node scripts/package.mjs",
-    "deploy": "node scripts/deploy.mjs",
-    "lint": "eslint .",
+    "package": "npm run build && cribl-app-package",
+    "deploy": "cribl-app-deploy",
+    "inspect:pack": "cribl-app-inspect",
+    "release:evidence": "cribl-app-release-evidence",
+    "security:static": "cribl-app-security",
+    "lint": "eslint . --max-warnings=0",
     "preview": "vite preview",
     "test": "vitest run --passWithNoTests",
     "test:e2e": "npx playwright test"
@@ -21,6 +24,7 @@
     "react-router-dom": "^7.0.0"
   },
   "devDependencies": {
+    "@cribl/app-tooling": "file:../cribl-search-app-framework/packages/app-tooling",
     "@eslint/js": "^9.39.4",
     "@playwright/test": "^1.45.0",
     "@types/node": "^22.0.0",
