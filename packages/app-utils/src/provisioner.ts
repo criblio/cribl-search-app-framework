@@ -257,16 +257,29 @@ function planToBody(want: ProvisionedSearch): Record<string, unknown> {
   };
 }
 
+/** Shape of POST /search/jobs. Cribl returns the created job wrapped
+ * in an `items` array, NOT as a bare object with a top-level `id`.
+ * Reading `.id` off the response yields undefined — see the note in
+ * runSearchJobSync. */
+interface JobCreateResponse {
+  items?: Array<{ id?: string }>;
+  id?: string;
+}
+
+function extractJobId(created: unknown): string {
+  const r = created as JobCreateResponse | null;
+  // `items[0].id` is what Cribl actually returns; the bare `id`
+  // fallback keeps this working if that ever changes back.
+  return r?.items?.[0]?.id ?? r?.id ?? '';
+}
+
 /** Run a search job synchronously: POST creates it, then we poll
  * /jobs/<id> until it reaches a terminal state. Returns the final
- * status string ("completed" / "failed" / etc.) or "unknown" on
- * timeout / network error.
+ * status string ("completed" / "failed" / "canceled") or "unknown" on
+ * rejection / timeout / network error.
  *
  * Cribl Search jobs are async — the POST returns immediately with a
- * job id, but the job runs in the background. The previous version of
- * seedLookups treated POST success as "the work is done", which is
- * wrong. The probe in seedLookups specifically needs the *eventual*
- * job status to know whether the lookup exists. */
+ * job id, but the job runs in the background. */
 async function runSearchJobSync(
   http: HttpClient,
   query: string,
@@ -276,12 +289,12 @@ async function runSearchJobSync(
 ): Promise<string> {
   let jobId: string;
   try {
-    const created = (await http.post('/m/default_search/search/jobs', {
+    const created = await http.post('/m/default_search/search/jobs', {
       query,
       earliest,
       latest,
-    })) as { id?: string };
-    jobId = created.id ?? '';
+    });
+    jobId = extractJobId(created);
   } catch {
     return 'unknown';
   }
@@ -307,35 +320,70 @@ async function runSearchJobSync(
   return 'unknown';
 }
 
-/** Probe-and-seed lookup creation. Cribl validates lookup names at
- * search creation, so any lookup the plan references must exist
- * first. We:
+/** Probe-and-seed lookup creation. Cribl validates lookup names when
+ * it plans a query, so any lookup the plan references must exist
+ * before the searches that join it can be created.
  *
- *   1. Probe with a no-op `| lookup <name>` query and *await* the
- *      probe job's terminal status. The job fails iff the lookup is
- *      missing.
- *   2. If the probe completed, the lookup exists and we leave it
- *      alone — important so re-provisioning doesn't overwrite a
- *      catalog lookup that's been populated with real data by the
- *      hourly catalog scheduled search.
- *   3. If the probe failed (or timed out), we run the seed query and
- *      await its completion so the next reconcile step (creating the
- *      search that joins this lookup) sees the seeded rows.
+ * A seed query is `print … | export mode=overwrite to lookup <name>`
+ * — it writes exactly one sentinel row. Seeding a lookup that already
+ * holds real data therefore DESTROYS that data: 24h of op baselines,
+ * the alert state machine's consecutive_bad / fire_count counters,
+ * the attribute catalog. So the probe is not an optimization; it is
+ * the only thing standing between a re-provision and data loss, and
+ * it has to fail safe.
  *
- * Failures are logged via the returned status but otherwise swallowed
- * — the search-creation step will surface a clearer error if the
- * seed didn't actually take. */
-async function seedLookups(http: HttpClient, lookups: SeedLookup[]): Promise<void> {
+ * The probe leans on the fact that Cribl resolves lookup names when it
+ * PLANS a query, before it runs one: a job naming a missing lookup is
+ * refused at create time with an HTTP 400 whose body says "Unknown
+ * lookup table name". So existence is decidable from the create call
+ * alone — `lookupExists` below — and only a lookup Cribl explicitly
+ * calls unknown is ever seeded.
+ *
+ * That "explicitly" is load-bearing, because the two ways to be wrong
+ * are not symmetric. Wrongly deciding "missing" silently overwrites
+ * live data. Wrongly deciding "exists" merely fails the subsequent
+ * search create with a legible "Unknown lookup table name" the user
+ * can act on. So anything short of a definitive missing answer — a
+ * network blip, a timeout, a 500 — leaves the lookup alone.
+ *
+ * (The previous probe was `dataset="otel" | … | limit 0`, which is
+ * invalid KQL — Cribl rejects `limit 0` with "Limit value outside of
+ * supported range" — so it 400d whether or not the lookup existed.
+ * Paired with a `runSearchJobSync` that read the job id from the wrong
+ * field and so never polled, it meant every reconcile re-seeded every
+ * lookup, overwriting each one with its sentinel row. It also
+ * hardcoded one app's dataset name; `print` needs no dataset at all.)
+ *
+ * Exported because `reconcile()` is not the only apply path: the
+ * in-app ProvisioningPanel previews with `planOnly()` and applies
+ * with `applyProvisioningPlan()`, and must seed in between. */
+export async function seedLookups(http: HttpClient, lookups: SeedLookup[]): Promise<void> {
   for (const lookup of lookups) {
-    const probe = `dataset="otel" | limit 1 | project x=1 | lookup ${lookup.name} on x | limit 0`;
-    const probeStatus = await runSearchJobSync(http, probe);
-    if (probeStatus === 'completed') {
-      // Lookup exists — don't overwrite.
-      continue;
-    }
-    // Either failed (lookup missing) or unknown (timeout / network).
-    // Run the seed and wait for it.
+    if ((await lookupExists(http, lookup.name)) !== 'no') continue;
+    // Definitively missing. Seed it, and wait for the export to land so
+    // the searches created next can resolve the lookup.
     await runSearchJobSync(http, lookup.seedQuery);
+  }
+}
+
+/** Does `name` resolve as a lookup? "unknown" means we couldn't get a
+ * definitive answer and the caller must not act destructively. */
+async function lookupExists(
+  http: HttpClient,
+  name: string,
+): Promise<'yes' | 'no' | 'unknown'> {
+  try {
+    await http.post('/m/default_search/search/jobs', {
+      query: `print x=1 | lookup ${name} on x`,
+      earliest: '-5m',
+      latest: 'now',
+    });
+    // Cribl planned the query, so the lookup resolved.
+    return 'yes';
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Both HTTP clients put the response body in the error message.
+    return /unknown lookup table name/i.test(msg) ? 'no' : 'unknown';
   }
 }
 
