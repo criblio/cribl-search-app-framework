@@ -147,18 +147,18 @@ credentials, and the app-specific smoke spec list.
 
 ## Working in this repo
 
-The framework itself doesn't ship a CI workflow (the **skeleton**
-does — that workflow ships into every consumer app). When making
-framework changes:
+The framework CI independently gates `app-utils` and `app-tooling`.
+The **skeleton** also ships pinned consumer CI/release workflows.
+When making framework changes:
 
 1. Edit `packages/app-utils/src/*` for the shared library.
 2. Edit `skeleton/*` for the clone-ready template. Changes here
    ship to every NEW app, but do NOT auto-propagate to existing
    apps — those copies were taken at scaffold time.
-3. Existing consumer apps (APM, Customer Analytics) pull
-   `@cribl/app-utils` via `file:` paths in their `package.json`,
-   so library changes are immediately visible to them — no publish
-   step.
+3. Existing consumer apps pull `@cribl/app-utils` and
+   `@cribl/app-tooling` via `file:` paths in their `package.json`, so
+   framework changes are consumed through an explicit SHA bump without
+   a registry publish step.
 4. Run `npm test && npm run typecheck` inside `packages/app-utils/`;
    consumers run their own lint + build as an integration gate.
 

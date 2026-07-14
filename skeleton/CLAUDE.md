@@ -48,9 +48,10 @@ the `mcp__cribl__*` tools become available.
 
 ## Deploying to staging
 
-`npm run deploy` builds, packages, uploads the pack, and installs
-it. If your app ships `scripts/provision.ts`, the deploy script
-runs it automatically after install — same code path as
+`npm run deploy` uses the pinned framework tooling to verify, build,
+inspect, upload, preinstall-check, and install/upgrade the exact pack
+without force. If your app ships `scripts/provision.ts`, the shared
+tool runs it automatically after install — same code path as
 `npm run provision` standalone.
 
 ```bash
@@ -71,9 +72,11 @@ The provisioner prints each action:
 ## Cutting a release
 
 Releases are triggered by pushing a `vX.Y.Z` tag — see
-`.github/workflows/release.yml`. The workflow runs `npm ci`,
-`npm run lint`, `npm run package`, and creates a GitHub Release
-with the pack tgz attached.
+`.github/workflows/release.yml`. CI and release use the same pinned
+framework action for source verification, supply-chain policy,
+deterministic packaging, archive inspection, and release evidence.
+The release workflow upgrades a validation workspace with that exact
+candidate, attests it, and creates the GitHub Release.
 
 **A lint failure on the tagged commit means no GitHub Release
 gets published** and recovery requires either force-retagging or

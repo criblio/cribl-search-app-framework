@@ -14,6 +14,8 @@
     "release:evidence": "cribl-app-release-evidence",
     "security:static": "cribl-app-security",
     "lint": "eslint . --max-warnings=0",
+    "verify": "npm run lint && npm test && npx tsc --noEmit",
+    "audit": "npm audit --audit-level=moderate && npm audit --omit=dev --audit-level=low",
     "preview": "vite preview",
     "test": "vitest run --passWithNoTests",
     "test:e2e": "npx playwright test"
