@@ -27,14 +27,19 @@ export type SearchFailureKind =
   | 'malformed-response';
 
 export class SearchJobError extends Error {
+  readonly kind: SearchFailureKind;
+  readonly jobId?: string;
+
   constructor(
-    public readonly kind: SearchFailureKind,
+    kind: SearchFailureKind,
     message: string,
-    public readonly jobId?: string,
+    jobId?: string,
     options?: ErrorOptions,
   ) {
     super(message, options);
     this.name = 'SearchJobError';
+    this.kind = kind;
+    this.jobId = jobId;
   }
 }
 
