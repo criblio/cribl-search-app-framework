@@ -21,7 +21,7 @@ npm run dev
 
 | Package | Description |
 |---------|-------------|
-| `@cribl/app-utils` | Search client, OAuth, settings, CSS tokens |
+| `@cribl/app-utils` | Search jobs, KQL safety, OAuth, settings, containment, CSS tokens |
 
 ## Apps built on this framework
 

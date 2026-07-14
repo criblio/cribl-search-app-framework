@@ -53,6 +53,11 @@ browser TS graph. Common patterns:
 
 - `runQuery(kql, earliest, latest, limit)` — generic Cribl Search
   job client (create → poll → fetch NDJSON results)
+- `runSearchJob(http, kql, options)` — the same strict job runner with
+  an injected browser/Node HTTP client, cancellation, server-side job
+  cleanup, bounded polling, pagination, and malformed-NDJSON failure
+- `@cribl/app-utils/kql` — KQL serializers and read-only/predicate
+  validators for every untrusted query boundary
 - `apiUrl()` — base URL for Cribl API calls inside the iframe
 - `getBearerToken(config)` — OAuth client-credentials exchange
   (Node side, used by deploy/provision scripts)
@@ -117,6 +122,11 @@ browser TS graph. Common patterns:
 - `styles/tokens.css` — Cribl Design System custom properties
 - `styles/base.css` — CSS reset + base element styles
 
+**Runtime containment**
+
+- `<ResilienceBoundary>` — router-free root/panel render containment
+  with retry and an optional app-owned fallback renderer
+
 ## Working in this repo
 
 The framework itself doesn't ship a CI workflow (the **skeleton**
@@ -131,8 +141,8 @@ framework changes:
    `@cribl/app-utils` via `file:` paths in their `package.json`,
    so library changes are immediately visible to them — no publish
    step.
-4. Run `npx tsc --noEmit` inside `packages/app-utils/` to
-   type-check; consumers run their own lint + build.
+4. Run `npm test && npm run typecheck` inside `packages/app-utils/`;
+   consumers run their own lint + build as an integration gate.
 
 ## Conventions
 
