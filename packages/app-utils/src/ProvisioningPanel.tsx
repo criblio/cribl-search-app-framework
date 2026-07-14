@@ -15,6 +15,7 @@ import {
   createBrowserHttpClient,
   planOnly,
   applyProvisioningPlan,
+  seedLookups,
   unprovisionAll,
   type ProvisionerConfig,
   type PlanAction,
@@ -113,6 +114,15 @@ export default function ProvisioningPanel({
     setState({ kind: 'applying', actions });
     try {
       const http = createBrowserHttpClient();
+      // Cribl validates lookup names when a search is created, so any
+      // lookup the plan's queries reference must exist first. `reconcile()`
+      // seeds them; this panel doesn't use `reconcile()`, so it has to seed
+      // here or every search doing `| lookup <name>` fails to create with
+      // "Unknown lookup table name". Preview stays read-only — seeding is
+      // a write, so it belongs on the apply path.
+      if (config.seedLookups?.length) {
+        await seedLookups(http, config.seedLookups);
+      }
       const results = await applyProvisioningPlan(http, actions);
       setState({ kind: 'results', results });
     } catch (err) {
