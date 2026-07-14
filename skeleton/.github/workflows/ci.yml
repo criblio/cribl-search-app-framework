@@ -5,22 +5,21 @@ on:
   push:
     branches: [master]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Clone shared framework
-        run: git clone --depth 1 https://github.com/criblio/cribl-search-app-framework.git ../cribl-search-app-framework
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: criblio/cribl-search-app-framework/.github/actions/release-build@24885e7464cf86143b4268003c7bbce76371a55c
         with:
-          node-version: '22'
-      - name: Install framework deps
-        run: cd ../cribl-search-app-framework/packages/app-utils && npm ci
-      - run: npm ci
-      - run: npm run lint
-      - name: Unit tests
-        run: npm test
-      - name: Type check
-        run: npx tsc --noEmit
-      - run: npm run build
+          framework-sha: 24885e7464cf86143b4268003c7bbce76371a55c
+      - name: Retain exact tested candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: build/*
+          if-no-files-found: error
+          retention-days: 14

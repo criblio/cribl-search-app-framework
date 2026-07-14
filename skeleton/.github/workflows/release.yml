@@ -2,38 +2,38 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Clone shared framework
-        run: git clone --depth 1 https://github.com/criblio/cribl-search-app-framework.git ../cribl-search-app-framework
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install framework deps
-        run: cd ../cribl-search-app-framework/packages/app-utils && npm ci
-      - name: Verify tag matches package.json version
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Verify tag matches package version
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          PKG_VERSION=$(node -p "require('./package.json').version")
-          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
-            exit 1
-          fi
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run package
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+          set -euo pipefail
+          test "${GITHUB_REF_NAME#v}" = "$(node -p "require('./package.json').version")"
+      - uses: criblio/cribl-search-app-framework/.github/actions/release-build@24885e7464cf86143b4268003c7bbce76371a55c
         with:
-          files: build/*.tgz
+          framework-sha: 24885e7464cf86143b4268003c7bbce76371a55c
+      - name: Upgrade validation workspace with exact candidate
+        env:
+          CRIBL_BASE_URL: ${{ secrets.CRIBL_RELEASE_VALIDATION_BASE_URL }}
+          CRIBL_CLIENT_ID: ${{ secrets.CRIBL_RELEASE_VALIDATION_CLIENT_ID }}
+          CRIBL_CLIENT_SECRET: ${{ secrets.CRIBL_RELEASE_VALIDATION_CLIENT_SECRET }}
+        run: npm run deploy -- --artifact build/*.tgz
+      - name: Attest exact tested package
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: build/*.tgz
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: build/*
           generate_release_notes: true
           fail_on_unmatched_files: true
