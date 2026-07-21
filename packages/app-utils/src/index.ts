@@ -84,3 +84,18 @@ export {
   type RulesetRuleResult,
   type RuleValidator,
 } from './dataset-provisioner.js';
+export {
+  METRICS_DATASET,
+  runMetricsQuery,
+  queryRange,
+  queryInstant,
+  listMetricMetadata,
+  listLabels,
+  listSeries,
+  listSearchDatasets,
+  type MetricsQueryOptions,
+  type MetricSample,
+  type MetricSeries,
+  type MetricMetadata,
+  type SearchDatasetInfo,
+} from './metrics.js';

@@ -1,0 +1,172 @@
+.wrap {
+  position: relative;
+  background: var(--cds-color-bg);
+  border: 1px solid var(--cds-color-border-subtle);
+  border-radius: var(--cds-radius-lg);
+  box-shadow: var(--cds-shadow-sm);
+  padding: var(--cds-space-md) var(--cds-space-lg) var(--cds-space-lg);
+  min-width: 0;
+}
+
+.header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--cds-space-md);
+  margin-bottom: var(--cds-space-sm);
+}
+
+.title {
+  font-size: var(--cds-font-size-md);
+  font-weight: var(--cds-font-weight-semibold);
+  color: var(--cds-color-fg);
+  white-space: nowrap;
+}
+
+.subtitle {
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-fg-muted);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--cds-space-xs) var(--cds-space-md);
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-fg-muted);
+  min-width: 0;
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Button reset — legend entries are interactive (isolate/toggle). */
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.legendItem:hover {
+  color: var(--cds-color-fg);
+}
+
+.legendItemDim {
+  opacity: 0.35;
+}
+
+.legendSwatch {
+  display: inline-block;
+  flex: none;
+  width: 12px;
+  height: 3px;
+  border-radius: 2px;
+  margin-right: 4px;
+}
+
+.svg {
+  display: block;
+  width: 100%;
+  font-family: var(--cds-font-family);
+}
+
+.refreshing {
+  opacity: 0.55;
+  transition: opacity var(--cds-transition-normal);
+}
+
+.empty {
+  position: absolute;
+  inset: 40px 0 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--cds-color-fg-subtle);
+  font-size: var(--cds-font-size-sm);
+  font-style: italic;
+  pointer-events: none;
+}
+
+.error {
+  position: absolute;
+  inset: 40px 0 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--cds-color-danger);
+  font-size: var(--cds-font-size-sm);
+  padding: 0 var(--cds-space-xl);
+  text-align: center;
+  pointer-events: none;
+}
+
+.tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--cds-color-bg);
+  border: 1px solid var(--cds-color-border);
+  color: var(--cds-color-fg);
+  font-size: var(--cds-font-size-xs);
+  padding: var(--cds-space-xs) var(--cds-space-sm);
+  border-radius: var(--cds-radius-md);
+  box-shadow: var(--cds-shadow-md);
+  z-index: 10;
+  min-width: 150px;
+  max-width: 300px;
+}
+
+.tooltipTime {
+  color: var(--cds-color-fg-subtle);
+  margin-bottom: 2px;
+}
+
+.tooltipRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.7;
+}
+
+.tooltipKey {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.tooltipValue {
+  font-weight: var(--cds-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.tooltipSeries {
+  color: var(--cds-color-fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tooltipMore {
+  color: var(--cds-color-fg-subtle);
+  margin-top: 2px;
+}
+
+.tooltipRowTarget {
+  background: var(--cds-color-bg-subtle, #f0f4fa);
+  border-radius: var(--cds-radius-sm);
+}
+
+.tooltipHint {
+  color: var(--cds-color-fg-subtle);
+  margin-top: 4px;
+  border-top: 1px solid var(--cds-color-border-subtle);
+  padding-top: 3px;
+}

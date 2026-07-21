@@ -1,13 +1,19 @@
 {
   "name": "@cribl/app-utils",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./search": "./src/search.ts",
+    "./metrics": "./src/metrics.ts",
+    "./viz": "./src/viz/index.ts",
     "./search-job": "./src/search-job.ts",
     "./kql": "./src/kql.ts",
+    "./agent": "./src/agent.ts",
+    "./agent-loop": "./src/agent-loop.ts",
+    "./agent-tools": "./src/agent-tools.ts",
+    "./investigator": "./src/investigator/index.ts",
     "./resilience-boundary": "./src/ResilienceBoundary.tsx",
     "./auth": "./src/auth.ts",
     "./settings": "./src/settings.ts",
@@ -21,14 +27,48 @@
     "./dataset-provider": "./src/DatasetProvider.tsx",
     "./provisioning-banner": "./src/ProvisioningBanner.tsx",
     "./styles/tokens.css": "./src/styles/tokens.css",
-    "./styles/base.css": "./src/styles/base.css"
+    "./styles/base.css": "./src/styles/base.css",
+    "./graph": "./src/graph/index.ts"
   },
   "peerDependencies": {
-    "react": "^18.0.0 || ^19.0.0"
+    "d3-array": "^3.2.0",
+    "d3-force": "^3.0.0",
+    "d3-scale": "^4.0.0",
+    "d3-shape": "^3.2.0",
+    "d3-time-format": "^4.1.0",
+    "react": "^18.0.0 || ^19.0.0",
+    "@capra/core": "^1.5.0"
+  },
+  "peerDependenciesMeta": {
+    "d3-array": {
+      "optional": true
+    },
+    "d3-scale": {
+      "optional": true
+    },
+    "d3-shape": {
+      "optional": true
+    },
+    "d3-time-format": {
+      "optional": true
+    },
+    "d3-force": {
+      "optional": true
+    },
+    "@capra/core": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@capra/core": "^1.5.0",
+    "@types/d3-array": "^3.2.0",
+    "@types/d3-force": "^3.0.10",
+    "@types/d3-scale": "^4.0.0",
+    "@types/d3-shape": "^3.1.0",
+    "@types/d3-time-format": "^4.0.0",
     "@types/node": "^24.13.3",
     "@types/react": "^19.0.0",
+    "d3-force": "^3.0.0",
     "typescript": "^6.0.3",
     "vitest": "^3.2.7"
   },

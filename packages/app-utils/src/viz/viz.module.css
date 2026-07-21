@@ -1,0 +1,184 @@
+/* Shared styles for panel, stat tile, bar list, and data table.
+   Chrome matches LineChart.module.css so every card reads as one system. */
+
+/* ---- Panel (card) ---- */
+.panel {
+  position: relative;
+  background: var(--cds-color-bg);
+  border: 1px solid var(--cds-color-border-subtle);
+  border-radius: var(--cds-radius-lg);
+  box-shadow: var(--cds-shadow-sm);
+  padding: var(--cds-space-md) var(--cds-space-lg) var(--cds-space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--cds-space-sm);
+  min-width: 0;
+}
+
+.panelHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--cds-space-md);
+}
+
+.panelTitle {
+  font-size: var(--cds-font-size-md);
+  font-weight: var(--cds-font-weight-semibold);
+  color: var(--cds-color-fg);
+}
+
+.panelSub {
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-fg-muted);
+}
+
+.panelError {
+  font-size: var(--cds-font-size-sm);
+  color: var(--cds-color-danger);
+}
+
+.panelEmpty {
+  color: var(--cds-color-fg-subtle);
+  font-size: var(--cds-font-size-sm);
+  font-style: italic;
+  padding: var(--cds-space-xl) 0;
+  text-align: center;
+}
+
+.refreshing {
+  opacity: 0.55;
+  transition: opacity var(--cds-transition-normal);
+}
+
+/* ---- Stat tile ---- */
+.statTile {
+  background: var(--cds-color-bg);
+  border: 1px solid var(--cds-color-border-subtle);
+  border-radius: var(--cds-radius-lg);
+  box-shadow: var(--cds-shadow-sm);
+  padding: var(--cds-space-md) var(--cds-space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.statLabel {
+  font-size: var(--cds-font-size-sm);
+  color: var(--cds-color-fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.statValue {
+  font-size: 26px;
+  font-weight: var(--cds-font-weight-semibold);
+  color: var(--cds-color-fg);
+  line-height: 1.2;
+}
+
+.statSub {
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-fg-subtle);
+}
+
+/* ---- Bar list ---- */
+.barList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cds-space-sm);
+}
+
+.barRow {
+  display: grid;
+  grid-template-columns: minmax(80px, 220px) 1fr 72px;
+  align-items: center;
+  gap: var(--cds-space-sm);
+  font-size: var(--cds-font-size-sm);
+}
+
+.barLabel {
+  color: var(--cds-color-fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+.barTrack {
+  height: 14px;
+  display: flex;
+  align-items: center;
+}
+
+.barFill {
+  height: 14px;
+  border-radius: 0 4px 4px 0;
+  min-width: 2px;
+}
+
+.barValue {
+  color: var(--cds-color-fg);
+  font-weight: var(--cds-font-weight-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Data table ---- */
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--cds-font-size-md);
+}
+
+.table th {
+  text-align: left;
+  font-weight: var(--cds-font-weight-semibold);
+  color: var(--cds-color-fg-muted);
+  font-size: var(--cds-font-size-sm);
+  padding: 6px var(--cds-space-sm);
+  border-bottom: 1px solid var(--cds-color-border);
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 6px var(--cds-space-sm);
+  border-bottom: 1px solid var(--cds-color-border-subtle);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.table td.num,
+.table th.num {
+  text-align: right;
+}
+
+.table tbody tr:hover {
+  background: var(--cds-color-bg-subtle);
+}
+
+/* Interactive rows (drilldowns). */
+.barRowClickable {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  border-radius: var(--cds-radius-sm);
+}
+
+.barRowClickable:hover {
+  background: var(--cds-color-bg-subtle);
+}
+
+.rowClickable {
+  cursor: pointer;
+}
