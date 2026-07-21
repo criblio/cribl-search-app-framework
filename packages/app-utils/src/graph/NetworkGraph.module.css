@@ -1,0 +1,54 @@
+.wrap {
+  position: relative;
+  overflow: hidden;
+  background: var(--cds-color-bg);
+  border: 1px solid var(--cds-color-border-subtle);
+  border-radius: var(--cds-radius-lg);
+}
+
+.svg {
+  display: block;
+  cursor: grab;
+  font-family: var(--cds-font-family);
+  user-select: none;
+}
+
+.svg:active {
+  cursor: grabbing;
+}
+
+.node,
+.nodeClickable {
+  touch-action: none;
+}
+
+.nodeClickable {
+  cursor: pointer;
+}
+
+.nodeLabel {
+  font-size: 11px;
+  fill: var(--cds-color-fg-muted);
+  pointer-events: none;
+}
+
+.edgeLabel {
+  font-size: 9px;
+  fill: var(--cds-color-fg-subtle);
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: var(--cds-color-bg);
+  stroke-width: 3px;
+}
+
+.annotation {
+  position: absolute;
+  z-index: 6;
+  min-width: 200px;
+  max-width: 280px;
+  background: var(--cds-color-bg);
+  border: 1px solid var(--cds-color-border);
+  border-radius: var(--cds-radius-md);
+  box-shadow: var(--cds-shadow-md);
+  padding: var(--cds-space-sm) var(--cds-space-md);
+}

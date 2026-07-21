@@ -23,14 +23,19 @@ function kvUrl(key: string): string {
   return `${apiUrl()}/kvstore/${key}`;
 }
 
-export async function loadSettings(): Promise<AppSettings> {
+/**
+ * Load app settings, falling back to `defaults` when the KV key is missing
+ * or unreadable. Saved values are merged over the defaults, so adding a new
+ * setting with a default doesn't require migrating stored blobs.
+ */
+export async function loadSettings(defaults: AppSettings = DEFAULT_SETTINGS): Promise<AppSettings> {
   try {
     const resp = await fetch(kvUrl('settings'));
-    if (!resp.ok) return { ...DEFAULT_SETTINGS };
+    if (!resp.ok) return { ...defaults };
     const text = await resp.text();
-    return JSON.parse(text) as AppSettings;
+    return { ...defaults, ...(JSON.parse(text) as AppSettings) };
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    return { ...defaults };
   }
 }
 
