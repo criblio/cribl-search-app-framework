@@ -24,6 +24,7 @@
  */
 
 import { kqlInteger, kqlTime } from './kql.js';
+import { queryInstant, queryRange, METRICS_DATASET } from './metrics.js';
 
 export interface ToolCallInvocation {
   id: string;
@@ -257,6 +258,119 @@ export function createRunSearchTool(
         name: call.name,
         content: `Search blocked or failed: ${msg}. Please revise the read-only query and retry.`,
         ui,
+      };
+    }
+  };
+}
+
+/**
+ * UI payload for a run_metrics_query tool execution — rendered as a
+ * chart card in the transcript. Range queries carry per-series points
+ * for a line chart; instant queries carry one row per series.
+ */
+export type MetricsQueryUi = {
+  kind: 'metrics';
+  query: string;
+  description: string;
+  earliest: string;
+  latest: string;
+  step?: number;
+  /** Range queries: per-series points (t in epoch ms) for a line chart. */
+  series?: Array<{ name: string; points: Array<{ t: number; v: number }> }>;
+  /** Instant queries: one row per series (labels + _value) for a bar list. */
+  rows?: Record<string, unknown>[];
+  error?: string;
+} & Record<string, unknown>;
+
+/** Arguments parsed out of a run_metrics_query tool_call. */
+interface MetricsQueryArgs {
+  query: string;
+  earliest?: string | number;
+  latest?: string | number;
+  step?: number;
+  description?: string;
+}
+
+/** Dependencies the app injects into the run_metrics_query executor. */
+export interface RunMetricsQueryDeps {
+  /** The metrics dataset to query. Defaults to METRICS_DATASET ('metrics'). */
+  dataset?: () => string | Promise<string>;
+}
+
+/** Derive a human-readable series name from a PromQL label set. */
+function metricsSeriesName(labels: Record<string, string>): string {
+  const values = Object.values(labels).filter(Boolean);
+  return values.length > 0 ? values.join(' · ') : 'value';
+}
+
+/**
+ * Build the run_metrics_query executor: run a PromQL expression against
+ * the fast metrics store and return both a compact textual summary (for
+ * the agent) and a 'metrics' chart card (for the UI). PromQL has no
+ * mutating forms, so it runs without approval; the read-only guarantee
+ * is structural, not a gate. Branches on `step`: with a step it's a
+ * range query (per-series line chart), without it an instant snapshot
+ * (labels + value rows). Errors are caught and reported back to the
+ * agent so it can self-correct rather than stalling the loop.
+ */
+export function createRunMetricsQueryTool(
+  deps: RunMetricsQueryDeps = {},
+): (call: ToolCallInvocation, signal?: AbortSignal) => Promise<ToolExecutionResult> {
+  return async (call, signal) => {
+    const args = parseArgs<MetricsQueryArgs>(call.arguments);
+    const earliest = String(args.earliest ?? '-1h');
+    const latest = String(args.latest ?? 'now');
+    const base: MetricsQueryUi = {
+      kind: 'metrics',
+      query: typeof args.query === 'string' ? args.query : '',
+      description: args.description ?? '',
+      earliest,
+      latest,
+    };
+    try {
+      if (typeof args.query !== 'string' || args.query.length === 0) {
+        throw new Error('run_metrics_query.query must be a non-empty string');
+      }
+      const dataset = (await deps.dataset?.()) ?? METRICS_DATASET;
+      let rows: Record<string, unknown>[];
+      let ui: MetricsQueryUi;
+      if (args.step && Number.isFinite(args.step)) {
+        const step = Math.max(15, Math.floor(args.step));
+        const series = await queryRange(args.query, { earliest, latest, step, dataset, signal });
+        rows = series.map((sr) => {
+          const values = sr.points.map((p) => p.v).filter((v) => Number.isFinite(v));
+          const sum = values.reduce((a, b) => a + b, 0);
+          return {
+            ...sr.labels,
+            points: sr.points.length,
+            first: values[0] ?? null,
+            last: values[values.length - 1] ?? null,
+            min: values.length ? Math.min(...values) : null,
+            max: values.length ? Math.max(...values) : null,
+            avg: values.length ? sum / values.length : null,
+          };
+        });
+        ui = {
+          ...base,
+          step,
+          series: series.map((sr) => ({
+            name: metricsSeriesName(sr.labels),
+            points: sr.points.map((p) => ({ t: p.t * 1000, v: p.v })),
+          })),
+        };
+      } else {
+        const samples = await queryInstant(args.query, { earliest, latest, dataset, signal });
+        rows = samples.map((sample) => ({ ...sample.labels, _time: sample._time, _value: sample._value }));
+        ui = { ...base, rows };
+      }
+      return { id: call.id, name: call.name, content: formatRowsForAgent(rows, 50), ui };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        id: call.id,
+        name: call.name,
+        content: `Metrics query failed: ${msg}. Check the PromQL and metric/label names, then retry.`,
+        ui: { ...base, error: msg },
       };
     }
   };

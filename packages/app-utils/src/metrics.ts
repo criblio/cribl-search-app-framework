@@ -217,3 +217,113 @@ export async function listSeries(
       return labels;
     });
 }
+
+// ── Dedup + short-TTL cache for the fast metrics store ────────────────
+/**
+ * Metrics reads are pure, idempotent GETs against the PromQL engine, but
+ * some are expensive (`histogram_quantile`, wide anomaly baselines). The
+ * engine keeps *computing* a query even after the browser aborts the
+ * fetch — so cancelling in-flight reads on rapid re-navigation and then
+ * re-firing identical ones piles abandoned-but-running computations onto
+ * the engine, and later cheap reads queue behind that backlog. Page
+ * latency then escalates across repeated navs even though client-side
+ * pending requests stay flat.
+ *
+ * The fix, for idempotent metrics reads: DON'T cancel — dedupe and
+ * briefly cache. A repeat nav (or a duplicate read within one view's
+ * fan-out) reuses the single in-flight promise or a recent result rather
+ * than spawning a fresh expensive computation. KQL search jobs stay
+ * cancellable (they hold worker-pool slots worth releasing); a metrics
+ * GET just needs to finish once and be reused.
+ *
+ * Because these reads deliberately drop any `signal`, a stale result can
+ * still resolve after a nav — pair them with `captureQueryGeneration()`
+ * at the call site to drop late fills before they touch the UI.
+ *
+ * TTL is short (metrics are minute-binned; a few seconds of staleness is
+ * invisible) — long enough to absorb a burst of navigations, short
+ * enough that a view's own auto-refresh still sees fresh data.
+ */
+const CACHE_TTL_MS = 12_000;
+
+interface CacheEntry<T> {
+  at: number;
+  value: T;
+}
+
+const instantCache = new Map<string, CacheEntry<MetricSample[]>>();
+const instantInflight = new Map<string, Promise<MetricSample[]>>();
+const rangeCache = new Map<string, CacheEntry<MetricSeries[]>>();
+const rangeInflight = new Map<string, Promise<MetricSeries[]>>();
+
+function cacheKey(query: string, opts: MetricsQueryOptions): string {
+  return [
+    query,
+    String(opts.earliest ?? '-1h'),
+    String(opts.latest ?? 'now'),
+    opts.step ?? '',
+    opts.dataset ?? '',
+  ].join('|');
+}
+
+/**
+ * Cached, de-duplicated instant query. Deliberately drops any `signal`:
+ * the read runs to completion so its result can be reused. Errors are
+ * not cached (the next caller retries).
+ */
+export async function cachedQueryInstant(
+  query: string,
+  opts: MetricsQueryOptions = {},
+): Promise<MetricSample[]> {
+  const key = cacheKey(query, opts);
+  const hit = instantCache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
+  const existing = instantInflight.get(key);
+  if (existing) return existing;
+  const { signal: _drop, ...rest } = opts;
+  void _drop;
+  const p = queryInstant(query, rest)
+    .then((rows) => {
+      instantCache.set(key, { at: Date.now(), value: rows });
+      instantInflight.delete(key);
+      return rows;
+    })
+    .catch((err) => {
+      instantInflight.delete(key);
+      throw err;
+    });
+  instantInflight.set(key, p);
+  return p;
+}
+
+/** Cached, de-duplicated range query. Same semantics as cachedQueryInstant. */
+export async function cachedQueryRange(
+  query: string,
+  opts: MetricsQueryOptions & { step: number },
+): Promise<MetricSeries[]> {
+  const key = cacheKey(query, opts);
+  const hit = rangeCache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
+  const existing = rangeInflight.get(key);
+  if (existing) return existing;
+  const { signal: _drop, ...rest } = opts;
+  void _drop;
+  const p = queryRange(query, rest)
+    .then((series) => {
+      rangeCache.set(key, { at: Date.now(), value: series });
+      rangeInflight.delete(key);
+      return series;
+    })
+    .catch((err) => {
+      rangeInflight.delete(key);
+      throw err;
+    });
+  rangeInflight.set(key, p);
+  return p;
+}
+
+/** Drop all cached metrics results (e.g. after the user changes dataset). */
+export function clearMetricsCache(): void {
+  instantCache.clear();
+  rangeCache.clear();
+}
