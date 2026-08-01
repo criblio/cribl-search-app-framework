@@ -93,9 +93,18 @@ export {
   listLabels,
   listSeries,
   listSearchDatasets,
+  cachedQueryInstant,
+  cachedQueryRange,
+  clearMetricsCache,
   type MetricsQueryOptions,
   type MetricSample,
   type MetricSeries,
   type MetricMetadata,
   type SearchDatasetInfo,
 } from './metrics.js';
+export {
+  newQueryGeneration,
+  currentQuerySignal,
+  withGenerationSignal,
+  captureQueryGeneration,
+} from './query-generation.js';
