@@ -45,6 +45,8 @@ describe('dataset accelerated fields', () => {
       ensureAcceleratedFields(http, '/datasets/otel', ['existing', 'service_name']),
     ).resolves.toEqual({ action: 'update', added: ['service_name'] });
     expect(http.patch).toHaveBeenCalledWith('/datasets/otel', {
+      id: 'otel',
+      type: 'cribl_search',
       cacheConnectionInfo: {
         acceleratedFields: ['existing', 'service_name'],
         cacheRef: 'main-cache',
