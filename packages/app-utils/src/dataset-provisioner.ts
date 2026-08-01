@@ -172,6 +172,7 @@ export async function ensureAcceleratedFields(
   }
 
   await http.patch(path, {
+    ...current,
     cacheConnectionInfo: {
       ...cacheConnectionInfo,
       acceleratedFields: [...presentArr, ...missing],
