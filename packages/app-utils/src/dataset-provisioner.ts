@@ -11,8 +11,8 @@
  *
  * Two pieces are supported, independently:
  *
- *   1. Accelerated fields — push a list of field ids onto the
- *      dataset's `acceleratedFields` array. Never removes fields
+ *   1. Accelerated fields — push field names onto the dataset's
+ *      `cacheConnectionInfo.acceleratedFields` array. Never removes fields
  *      the user added themselves. Used for indexed-field pushdown.
  *
  *   2. Ruleset rule — ensure a single rule with a given id exists
@@ -55,9 +55,11 @@ export function rulesetPath(
 // Wire types
 // ────────────────────────────────────────────────────────────────
 
-export interface AcceleratedField {
-  id: string;
-  createdAt?: number;
+export type AcceleratedField = string;
+
+interface CacheConnectionInfo {
+  acceleratedFields?: AcceleratedField[];
+  [key: string]: unknown;
 }
 
 export interface DatasetRule {
@@ -74,7 +76,7 @@ export interface DatasetRule {
 
 interface DatasetObject {
   id: string;
-  acceleratedFields?: AcceleratedField[];
+  cacheConnectionInfo?: CacheConnectionInfo;
   [key: string]: unknown;
 }
 
@@ -123,7 +125,7 @@ export async function getAcceleratedFieldsStatus(
   try {
     const resp = (await http.get(path)) as DatasetResponse;
     const dataset = resp?.items?.[0];
-    const present = (dataset?.acceleratedFields ?? []).map((f) => f.id);
+    const present = dataset?.cacheConnectionInfo?.acceleratedFields ?? [];
     const presentSet = new Set(present);
     const missing = expected.filter((f) => !presentSet.has(f));
     return { ok: missing.length === 0, present, missing };
@@ -138,7 +140,7 @@ export async function getAcceleratedFieldsStatus(
 }
 
 /** Push the expected field ids onto the dataset's
- * `acceleratedFields` array. Idempotent — if every expected id is
+ * `cacheConnectionInfo.acceleratedFields` array. Idempotent — if every expected id is
  * already present, returns noop. Never removes fields the user has
  * added themselves. */
 export async function ensureAcceleratedFields(
@@ -161,18 +163,20 @@ export async function ensureAcceleratedFields(
     return { action: 'noop', added: [], reason: 'dataset not found' };
   }
 
-  const presentArr = current.acceleratedFields ?? [];
-  const presentSet = new Set(presentArr.map((f) => f.id));
+  const cacheConnectionInfo = current.cacheConnectionInfo ?? {};
+  const presentArr = cacheConnectionInfo.acceleratedFields ?? [];
+  const presentSet = new Set(presentArr);
   const missing = expected.filter((f) => !presentSet.has(f));
   if (missing.length === 0) {
     return { action: 'noop', added: [] };
   }
 
-  const nextFields: AcceleratedField[] = [
-    ...presentArr,
-    ...missing.map((id) => ({ id })),
-  ];
-  await http.patch(path, { acceleratedFields: nextFields });
+  await http.patch(path, {
+    cacheConnectionInfo: {
+      ...cacheConnectionInfo,
+      acceleratedFields: [...presentArr, ...missing],
+    },
+  });
   return {
     action: presentArr.length === 0 ? 'create' : 'update',
     added: missing,
