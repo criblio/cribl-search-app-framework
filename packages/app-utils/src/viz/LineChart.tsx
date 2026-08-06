@@ -103,8 +103,29 @@ export default function LineChart({
     return () => ro.disconnect();
   }, []);
 
+  const yFmt = yFormat ?? series[0]?.format ?? defaultFormat;
+
+  // Left margin sized to the widest y-axis tick label. A fixed margin
+  // (56px) left the right-anchored labels ~48px of room, which clipped
+  // the leading digits of wider formats — "20.0 Mbps" rendered as
+  // "0.0 Mbps". Estimate from the ticks the y domain will produce:
+  // 11px font ≈ 6.2px/char, +8px tick gap, +6px breathing room. Sized
+  // against ALL series (not just visible) so toggling the legend
+  // doesn't shift the plot.
+  const mLeft = useMemo(() => {
+    let dataMax = 0;
+    for (const sr of series)
+      for (const d of sr.data) if (Number.isFinite(d.v) && d.v > dataMax) dataMax = d.v;
+    const yResolved = yMax ?? (dataMax > 0 ? dataMax : 1);
+    const ticks = scaleLinear()
+      .domain([0, yResolved * 1.1])
+      .ticks(4);
+    const maxChars = ticks.reduce((m, t) => Math.max(m, yFmt(t).length), 1);
+    return Math.max(M.left, Math.ceil(maxChars * 6.2) + 14);
+  }, [series, yMax, yFmt]);
+
   const chartWidth = Math.max(200, width);
-  const innerW = chartWidth - M.left - M.right;
+  const innerW = chartWidth - mLeft - M.right;
   const innerH = height - M.top - M.bottom;
 
   // A stale isolation (series renamed / dropped out of topk) is ignored
@@ -158,7 +179,6 @@ export default function LineChart({
   }, [visibleSeries, innerW, innerH, yMax, area]);
 
   const fmtTick = spanMs > 26 * 3600 * 1000 ? timeFormat('%b %d %H:%M') : timeFormat('%H:%M');
-  const yFmt = yFormat ?? series[0]?.format ?? defaultFormat;
 
   const hoverSamples = useMemo(() => {
     if (hover == null || !xScale || !yScale) return null;
@@ -203,7 +223,7 @@ export default function LineChart({
 
   const toLocal = (e: React.MouseEvent<SVGSVGElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    return { x: e.clientX - rect.left - M.left, y: e.clientY - rect.top - M.top };
+    return { x: e.clientX - rect.left - mLeft, y: e.clientY - rect.top - M.top };
   };
 
   const finishDrag = () => {
@@ -291,7 +311,7 @@ export default function LineChart({
             setDrag(null);
           }}
         >
-          <g transform={`translate(${M.left},${M.top})`}>
+          <g transform={`translate(${mLeft},${M.top})`}>
             {hasData &&
               tickY.map((t, i) => (
                 <g key={`gy-${i}`}>
@@ -416,7 +436,7 @@ export default function LineChart({
       {hasData && hover != null && hoverSamples && hoverSamples.samples.length > 0 && !brushing && (
         <div
           className={s.tooltip}
-          style={{ left: Math.min(Math.max(M.left + hover.x, 10), chartWidth - 180), top: 8 }}
+          style={{ left: Math.min(Math.max(mLeft + hover.x, 10), chartWidth - 180), top: 8 }}
         >
           <div className={s.tooltipTime}>{timeFormat('%H:%M:%S')(new Date(hoverSamples.t))}</div>
           {hoverSamples.samples.slice(0, 10).map((smp, i) => (
