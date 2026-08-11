@@ -36,11 +36,12 @@ export async function createReleaseEvidence({
   root = process.cwd(),
   artifact,
   requireEmptyProxies = false,
+  proxiesManifest,
 } = {}) {
   const rootDir = resolve(root);
   const pkg = JSON.parse(await readFile(join(rootDir, 'package.json'), 'utf8'));
   const artifactPath = resolve(rootDir, artifact ?? join('build', `${pkg.name}-${pkg.version}.tgz`));
-  await inspectPack(artifactPath, { root: rootDir, requireEmptyProxies });
+  await inspectPack(artifactPath, { root: rootDir, requireEmptyProxies, proxiesManifest });
 
   const artifactBytes = await readFile(artifactPath);
   const lockBytes = await readFile(join(rootDir, 'package-lock.json'));

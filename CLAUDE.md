@@ -133,7 +133,11 @@ Node-only commands shared by every consumer app:
 
 - `cribl-app-package` — deterministic Cribl App tgz construction
 - `cribl-app-inspect` — archive shape, manifest, static asset, and
-  optional empty-proxy policy validation
+  optional proxy policy validation: `--require-empty-proxies`, or
+  `--proxies-manifest <path>` to deep-compare the packaged
+  `proxies.yml` against a committed expected manifest (any extra or
+  missing domain, path entry, injected header, or timeout fails;
+  an empty manifest is equivalent to `--require-empty-proxies`)
 - `cribl-app-deploy` — exact-artifact upload, server preinstall policy,
   idempotent install/upgrade without force, and optional provisioning
 - `cribl-app-release-evidence` — checksum, source/framework metadata,
@@ -142,8 +146,9 @@ Node-only commands shared by every consumer app:
   tracked-secret gates
 
 The tooling package owns mechanisms. Consumer package scripts and CI
-provide app policy such as `--require-empty-proxies`, live workspace
-credentials, and the app-specific smoke spec list.
+provide app policy such as `--require-empty-proxies` /
+`--proxies-manifest`, live workspace credentials, and the
+app-specific smoke spec list.
 
 ## Working in this repo
 
