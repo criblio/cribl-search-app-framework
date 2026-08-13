@@ -3,6 +3,7 @@ import { basename, join, resolve } from 'node:path';
 import { loadDotEnv } from './dotenv.mjs';
 import { inspectPack } from './inspect.mjs';
 import { runCommand } from './process.mjs';
+import { diffProxies, parseProxiesYaml } from './proxies.mjs';
 
 function oauthEndpoints(baseUrl) {
   const staging = /cribl-staging\.cloud/.test(baseUrl);
@@ -93,6 +94,7 @@ async function preinstallCheck({
   token,
   source,
   requireEmptyProxies,
+  expectedProxies,
   requireNoPolicies,
 }) {
   const result = await apiJson({
@@ -109,6 +111,17 @@ async function preinstallCheck({
   }
   if (requireEmptyProxies && hasEntries(item.proxies ?? {})) {
     throw new Error(`Preinstall check found proxy capability: ${JSON.stringify(item.proxies)}`);
+  }
+  if (expectedProxies !== undefined) {
+    const differences = diffProxies(item.proxies ?? {}, expectedProxies, {
+      actualLabel: 'server-reported proxies',
+    });
+    if (differences.length > 0) {
+      throw new Error(
+        'Preinstall check proxies do not match the expected manifest:\n' +
+        differences.map((entry) => `  - ${entry}`).join('\n'),
+      );
+    }
   }
   if (requireNoPolicies && hasEntries(item.policies ?? {})) {
     throw new Error(`Preinstall check found undeclared policies: ${JSON.stringify(item.policies)}`);
@@ -144,9 +157,13 @@ export async function deployApp({
   root = process.cwd(),
   artifact,
   requireEmptyProxies = false,
+  proxiesManifest,
   requireNoPolicies = false,
   provision = true,
 } = {}) {
+  if (requireEmptyProxies && proxiesManifest) {
+    throw new Error('--require-empty-proxies and --proxies-manifest are mutually exclusive');
+  }
   const rootDir = resolve(root);
   const fileEnv = await loadDotEnv(join(rootDir, '.env')).catch(() => ({}));
   const env = { ...fileEnv, ...process.env };
@@ -163,7 +180,10 @@ export async function deployApp({
     await runCommand('npm', ['run', 'package'], rootDir);
     artifactPath = join(rootDir, 'build', `${pkg.name}-${pkg.version}.tgz`);
   }
-  await inspectPack(artifactPath, { root: rootDir, requireEmptyProxies });
+  await inspectPack(artifactPath, { root: rootDir, requireEmptyProxies, proxiesManifest });
+  const expectedProxies = proxiesManifest
+    ? parseProxiesYaml(await readFile(resolve(rootDir, proxiesManifest), 'utf8'))
+    : undefined;
   const bytes = await readFile(artifactPath);
   const { tokenUrl, audience } = oauthEndpoints(baseUrl);
   const token = await getBearerToken({
@@ -178,6 +198,7 @@ export async function deployApp({
     token,
     source,
     requireEmptyProxies,
+    expectedProxies,
     requireNoPolicies,
   });
   const installed = await installUploadedPack({ baseUrl, token, source, pkg });

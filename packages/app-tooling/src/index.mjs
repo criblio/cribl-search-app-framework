@@ -1,5 +1,6 @@
 export { createAppPack, packageApp, servePackageTgz } from './pack.mjs';
 export { inspectPack, formatInspection } from './inspect.mjs';
+export { parseProxiesYaml, diffProxies } from './proxies.mjs';
 export { createReleaseEvidence } from './release-evidence.mjs';
 export { deployApp, installUploadedPack } from './deploy.mjs';
 export {

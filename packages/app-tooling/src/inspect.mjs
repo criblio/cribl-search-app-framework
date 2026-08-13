@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { diffProxies, parseProxiesYaml } from './proxies.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -17,8 +18,11 @@ async function tarText(root, args) {
 /** Inspect an exact Cribl App archive before upload or publication. */
 export async function inspectPack(
   artifactPath,
-  { root = process.cwd(), requireEmptyProxies = false } = {},
+  { root = process.cwd(), requireEmptyProxies = false, proxiesManifest } = {},
 ) {
+  if (requireEmptyProxies && proxiesManifest) {
+    throw new Error('--require-empty-proxies and --proxies-manifest are mutually exclusive');
+  }
   const rootDir = resolve(root);
   const artifact = resolve(rootDir, artifactPath);
   const sourcePackage = JSON.parse(await readFile(join(rootDir, 'package.json'), 'utf8'));
@@ -56,6 +60,16 @@ export async function inspectPack(
     .filter((line) => line && !line.startsWith('#'));
   if (requireEmptyProxies && activeProxyLines.length > 0) {
     throw new Error(`pack declares external proxy capability: ${activeProxyLines.join(' ')}`);
+  }
+  if (proxiesManifest) {
+    const manifestText = await readFile(resolve(rootDir, proxiesManifest), 'utf8');
+    const differences = diffProxies(parseProxiesYaml(proxies), parseProxiesYaml(manifestText));
+    if (differences.length > 0) {
+      throw new Error(
+        `packaged proxies.yml does not match ${proxiesManifest}:\n` +
+        differences.map((entry) => `  - ${entry}`).join('\n'),
+      );
+    }
   }
   if (!files.some((entry) => /^static\/assets\/.*\.js$/.test(entry))) {
     throw new Error('pack contains no compiled JavaScript asset');
