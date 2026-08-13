@@ -24,7 +24,7 @@
  */
 
 import { kqlInteger, kqlTime } from './kql.js';
-import { queryInstant, queryRange, METRICS_DATASET } from './metrics.js';
+import { queryInstant, queryRange, METRICS_DATASET, type MetricsTransport } from './metrics.js';
 
 export interface ToolCallInvocation {
   id: string;
@@ -295,6 +295,13 @@ interface MetricsQueryArgs {
 export interface RunMetricsQueryDeps {
   /** The metrics dataset to query. Defaults to METRICS_DATASET ('metrics'). */
   dataset?: () => string | Promise<string>;
+  /**
+   * How the metrics query GET runs. Omit in the browser (the default
+   * transport reads `window.CRIBL_API_URL` + iframe proxy). A
+   * non-browser host injects its own transport — the metrics parallel
+   * to run_search's injected `runQuery`.
+   */
+  transport?: MetricsTransport;
 }
 
 /** Derive a human-readable series name from a PromQL label set. */
@@ -334,9 +341,10 @@ export function createRunMetricsQueryTool(
       const dataset = (await deps.dataset?.()) ?? METRICS_DATASET;
       let rows: Record<string, unknown>[];
       let ui: MetricsQueryUi;
+      const transport = deps.transport;
       if (args.step && Number.isFinite(args.step)) {
         const step = Math.max(15, Math.floor(args.step));
-        const series = await queryRange(args.query, { earliest, latest, step, dataset, signal });
+        const series = await queryRange(args.query, { earliest, latest, step, dataset, signal, transport });
         rows = series.map((sr) => {
           const values = sr.points.map((p) => p.v).filter((v) => Number.isFinite(v));
           const sum = values.reduce((a, b) => a + b, 0);
@@ -359,7 +367,7 @@ export function createRunMetricsQueryTool(
           })),
         };
       } else {
-        const samples = await queryInstant(args.query, { earliest, latest, dataset, signal });
+        const samples = await queryInstant(args.query, { earliest, latest, dataset, signal, transport });
         rows = samples.map((sample) => ({ ...sample.labels, _time: sample._time, _value: sample._value }));
         ui = { ...base, rows };
       }

@@ -35,7 +35,23 @@ export interface MetricsQueryOptions {
   /** Override the metrics dataset. */
   dataset?: string;
   signal?: AbortSignal;
+  /**
+   * How the metrics query GET is executed. Defaults to
+   * {@link defaultMetricsTransport}, which reads `window.CRIBL_API_URL`
+   * and relies on the iframe fetch proxy — correct in the app. A
+   * non-browser host (a server-side investigation runtime) injects a
+   * transport that targets its own base URL and adds auth, exactly as
+   * the search-job runner takes an injected HTTP client. Given a query
+   * + options, it returns the raw NDJSON response body.
+   */
+  transport?: MetricsTransport;
 }
+
+/** Executes the metrics query GET and returns the raw NDJSON body. */
+export type MetricsTransport = (
+  query: string,
+  opts: MetricsQueryOptions,
+) => Promise<string>;
 
 /** One event row from the metrics API, `_time` normalized to epoch seconds. */
 export interface MetricSample {
@@ -65,7 +81,13 @@ interface RawRow {
   [key: string]: unknown;
 }
 
-function buildUrl(query: string, opts: MetricsQueryOptions): string {
+/**
+ * The metrics query path relative to an `/api/v1` base:
+ * `/m/default_search/search/query?…`. Exported so an injected
+ * transport builds the identical request against its own base URL
+ * rather than re-deriving the parameter contract.
+ */
+export function metricsQueryPath(query: string, opts: MetricsQueryOptions): string {
   const params = new URLSearchParams({
     query,
     earliest: String(opts.earliest ?? '-1h'),
@@ -74,15 +96,30 @@ function buildUrl(query: string, opts: MetricsQueryOptions): string {
     datasetId: opts.dataset ?? METRICS_DATASET,
   });
   if (opts.step !== undefined) params.set('step', String(opts.step));
-  return `${apiUrl().replace(/\/$/, '')}/m/default_search/search/query?${params}`;
+  return `/m/default_search/search/query?${params}`;
 }
 
-async function fetchRows(query: string, opts: MetricsQueryOptions = {}): Promise<RawRow[]> {
+function buildUrl(query: string, opts: MetricsQueryOptions): string {
+  return `${apiUrl().replace(/\/$/, '')}${metricsQueryPath(query, opts)}`;
+}
+
+/**
+ * Browser transport: GET the metrics query URL through the iframe
+ * fetch proxy (auth rides the parent session). This is the default
+ * when no transport is injected.
+ */
+export const defaultMetricsTransport: MetricsTransport = async (query, opts) => {
   const response = await fetch(buildUrl(query, opts), { signal: opts.signal });
   const text = await response.text();
   if (!response.ok) {
     throw new Error(`metrics query failed (${response.status}): ${text.slice(0, 400)}`);
   }
+  return text;
+};
+
+async function fetchRows(query: string, opts: MetricsQueryOptions = {}): Promise<RawRow[]> {
+  const transport = opts.transport ?? defaultMetricsTransport;
+  const text = await transport(query, opts);
   const lines = text.split('\n').filter((l) => l.trim() !== '');
   if (lines.length === 0) return [];
   const summary = JSON.parse(lines[0]) as {
