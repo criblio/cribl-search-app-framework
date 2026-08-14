@@ -22,8 +22,18 @@ import {
   type ActionResult,
   type SavedSearchRow,
   type ProvisionedSearch,
+  type HttpClient,
 } from './provisioner.js';
 import s from './ProvisioningPanel.module.css';
+
+/** One app-specific provisioning step run after the saved-search
+ *  reconcile (e.g. a webhook target + notification binding). Reported
+ *  as its own result row alongside the searches. */
+export interface ProvisioningExtraStep {
+  label: string;
+  ok: boolean;
+  detail?: string;
+}
 
 type PanelState =
   | { kind: 'idle' }
@@ -35,7 +45,7 @@ type PanelState =
       actions: PlanAction[];
     }
   | { kind: 'applying'; actions: PlanAction[] }
-  | { kind: 'results'; results: ActionResult[] }
+  | { kind: 'results'; results: ActionResult[]; extra?: ProvisioningExtraStep[] }
   | { kind: 'error'; error: string };
 
 export interface ProvisioningPanelProps {
@@ -46,6 +56,15 @@ export interface ProvisioningPanelProps {
   helpText?: React.ReactNode;
   /** Optional custom help copy in the Danger zone. */
   dangerHelpText?: React.ReactNode;
+  /**
+   * Optional app-specific steps to run on "Apply", AFTER the saved-search
+   * reconcile (so any search the steps depend on already exists). Lets an
+   * app do everything its CLI provisioner does from the same button —
+   * e.g. ensure a notification target + binding. Receives the same
+   * browser HTTP client; return a result row per step. Thrown errors are
+   * caught and surfaced as a failed step, never failing the reconcile.
+   */
+  afterReconcile?: (http: HttpClient) => Promise<ProvisioningExtraStep[]>;
 }
 
 function countByKind(actions: PlanAction[]): Record<PlanAction['kind'], number> {
@@ -93,6 +112,7 @@ export default function ProvisioningPanel({
   config,
   helpText,
   dangerHelpText,
+  afterReconcile,
 }: ProvisioningPanelProps) {
   const [state, setState] = useState<PanelState>({ kind: 'idle' });
   const [confirmUnprovision, setConfirmUnprovision] = useState(false);
@@ -124,7 +144,24 @@ export default function ProvisioningPanel({
         await seedLookups(http, config.seedLookups);
       }
       const results = await applyProvisioningPlan(http, actions);
-      setState({ kind: 'results', results });
+      // App-specific post-reconcile steps (e.g. webhook target + binding).
+      // Runs after the searches so anything they depend on exists; a
+      // throw becomes a failed step rather than failing the whole apply.
+      let extra: ProvisioningExtraStep[] | undefined;
+      if (afterReconcile) {
+        try {
+          extra = await afterReconcile(http);
+        } catch (err) {
+          extra = [
+            {
+              label: 'Post-reconcile steps',
+              ok: false,
+              detail: err instanceof Error ? err.message : String(err),
+            },
+          ];
+        }
+      }
+      setState({ kind: 'results', results, extra });
     } catch (err) {
       setState({ kind: 'error', error: err instanceof Error ? err.message : String(err) });
     }
@@ -193,7 +230,11 @@ export default function ProvisioningPanel({
       )}
 
       {state.kind === 'results' && (
-        <ResultsView results={state.results} onDone={() => setState({ kind: 'idle' })} />
+        <ResultsView
+          results={state.results}
+          extra={state.extra}
+          onDone={() => setState({ kind: 'idle' })}
+        />
       )}
 
       <div className={s.dangerZone}>
@@ -289,22 +330,25 @@ function SummaryChip({
 
 function ResultsView({
   results,
+  extra,
   onDone,
 }: {
   results: ActionResult[];
+  extra?: ProvisioningExtraStep[];
   onDone: () => void;
 }) {
   const failures = results.filter((r) => !r.ok);
   const okCount = results.filter((r) => r.ok).length;
+  const extraFailures = (extra ?? []).filter((e) => !e.ok).length;
   return (
     <div>
       <div className={s.statusLine}>
-        {failures.length === 0 ? (
-          <>All {okCount} action(s) applied cleanly.</>
+        {failures.length === 0 && extraFailures === 0 ? (
+          <>All {okCount + (extra?.length ?? 0)} action(s) applied cleanly.</>
         ) : (
           <>
-            {okCount} succeeded,{' '}
-            <strong className={s.errText}>{failures.length} failed</strong>.
+            {okCount + (extra?.length ?? 0) - failures.length - extraFailures} succeeded,{' '}
+            <strong className={s.errText}>{failures.length + extraFailures} failed</strong>.
           </>
         )}
       </div>
@@ -322,6 +366,17 @@ function ResultsView({
               {r.action.kind}: {actionLabel(r.action)}
             </span>
             {r.error && <span className={s.errText}>{r.error}</span>}
+          </li>
+        ))}
+        {(extra ?? []).map((e) => (
+          <li key={`extra:${e.label}`} className={s.actionRow}>
+            <span
+              className={`${s.actionKind} ${e.ok ? s.actionKind_noop : s.actionKind_delete}`}
+            >
+              {e.ok ? 'ok' : 'fail'}
+            </span>
+            <span className={s.actionId}>{e.label}</span>
+            {e.detail && <span className={s.errText}>{e.detail}</span>}
           </li>
         ))}
       </ul>
