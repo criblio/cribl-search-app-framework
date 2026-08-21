@@ -265,7 +265,7 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
       .exec(
         `SELECT id, alert_id, trigger_event_id, incident_key, status,
                 error, created_at, started_at, concluded_at, turn, schema_version,
-                mode, turn_budget
+                mode, title, turn_budget
          FROM investigation LIMIT 1`,
       )
       .toArray();
