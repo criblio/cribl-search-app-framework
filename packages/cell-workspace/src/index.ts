@@ -22,5 +22,18 @@ export {
   resolveRepoForService,
   type RepoConfig,
 } from './checkout';
-export { RepoStore, emptyStats, type CheckoutStats } from './repoStore';
+export {
+  WRITE_TOOL_DEFINITIONS,
+  WRITE_TOOL_NAMES,
+  createWriteToolExecutors,
+  type WriteToolDeps,
+} from './writeTools';
+export { openPrWithChanges, type OpenPrResult } from './gitPush';
+export {
+  RepoStore,
+  emptyStats,
+  type CheckoutStats,
+  type DirtyFile,
+  type RepoOrigin,
+} from './repoStore';
 export { gunzipUntarEach, stripTopDir, type TarEntry } from './untar';
