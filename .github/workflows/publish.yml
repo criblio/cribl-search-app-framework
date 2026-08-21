@@ -1,0 +1,44 @@
+name: Publish packages
+
+# Publish any workspace package whose local version is not yet in the
+# GitHub Packages registry. Runs after every master push (a no-op when
+# every version already exists) and on demand. Bump a package's
+# `version` to release it — versions are immutable once published.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+          registry-url: https://npm.pkg.github.com
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish missing versions
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for dir in packages/*/; do
+            name=$(node -p "require('./$dir/package.json').name")
+            version=$(node -p "require('./$dir/package.json').version")
+            if npm view "$name@$version" version --registry https://npm.pkg.github.com >/dev/null 2>&1; then
+              echo "✓ $name@$version already published"
+            else
+              echo "▶ publishing $name@$version"
+              npm publish --workspace "$name"
+            fi
+          done

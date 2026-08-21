@@ -1,0 +1,11 @@
+{
+  "name": "cribl-search-app-framework",
+  "private": true,
+  "description": "Cribl Search App framework monorepo \u2014 shared libraries published to GitHub Packages under @criblio",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}

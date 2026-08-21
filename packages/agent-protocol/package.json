@@ -2,7 +2,7 @@
   "name": "@criblio/agent-protocol",
   "version": "0.1.0",
   "type": "module",
-  "description": "Wire protocol between a cell (server-side agent harness on celld) and its app UI: loop events, server frames, session statuses. Isomorphic — no runtime dependencies, safe in workers and browsers.",
+  "description": "Wire protocol between a cell (server-side agent harness on celld) and its app UI: loop events, server frames, session statuses. Isomorphic \u2014 no runtime dependencies, safe in workers and browsers.",
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts"
@@ -14,5 +14,14 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/criblio/cribl-search-app-framework.git",
+    "directory": "packages/agent-protocol"
   }
 }

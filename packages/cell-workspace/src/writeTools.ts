@@ -12,11 +12,11 @@
  * Same executor contract as the read tools: failures are explanatory
  * `content` the model can react to, never thrown errors.
  */
-import type { AgentToolDefinition } from '@cribl/app-utils/agent';
+import type { AgentToolDefinition } from '@criblio/app-utils/agent';
 import type {
   ToolCallInvocation,
   ToolExecutionResult,
-} from '@cribl/app-utils/agent-tools';
+} from '@criblio/app-utils/agent-tools';
 import type { RepoStore } from './repoStore';
 import { openPrWithChanges } from './gitPush';
 

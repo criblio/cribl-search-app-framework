@@ -16,11 +16,11 @@
  * a context builder; the cell injects the same plus the server-only
  * concerns (triggers, seeds, lifecycle).
  */
-import type { AgentToolDefinition } from '@cribl/app-utils/agent';
+import type { AgentToolDefinition } from '@criblio/app-utils/agent';
 import type {
   ToolCallInvocation,
   ToolExecutionResult,
-} from '@cribl/app-utils/agent-tools';
+} from '@criblio/app-utils/agent-tools';
 import type { CellEnv } from './env';
 import type { WireLoopEvent } from '@criblio/agent-protocol';
 

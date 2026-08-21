@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  app-utils:
+  packages:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -17,70 +17,8 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: packages/app-utils/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
-        working-directory: packages/app-utils
-      - run: npm test
-        working-directory: packages/app-utils
-      - run: npm run typecheck
-        working-directory: packages/app-utils
-  agent-protocol:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: packages/agent-protocol/package-lock.json
-      - run: npm ci
-        working-directory: packages/agent-protocol
-      - run: npm test
-        working-directory: packages/agent-protocol
-      - run: npm run typecheck
-        working-directory: packages/agent-protocol
-  cell-workspace:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: packages/cell-workspace/package-lock.json
-      - run: npm ci
-        working-directory: packages/cell-workspace
-      - run: npm test
-        working-directory: packages/cell-workspace
-      - run: npm run typecheck
-        working-directory: packages/cell-workspace
-  cell-harness:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: packages/cell-harness/package-lock.json
-      - run: npm ci
-        working-directory: packages/cell-harness
-      - run: npm test
-        working-directory: packages/cell-harness
-      - run: npm run typecheck
-        working-directory: packages/cell-harness
-  app-tooling:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: packages/app-tooling/package-lock.json
-      - run: npm ci
-        working-directory: packages/app-tooling
-      - run: npm test
-        working-directory: packages/app-tooling
-      - run: npm run audit
-        working-directory: packages/app-tooling
+      - run: npm test --workspaces --if-present
+      - run: npm run typecheck --workspaces --if-present
+      - run: npm run audit --workspaces --if-present

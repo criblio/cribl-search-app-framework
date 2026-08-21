@@ -26,7 +26,7 @@
     "react-router-dom": "^7.0.0"
   },
   "devDependencies": {
-    "@cribl/app-tooling": "file:../cribl-search-app-framework/packages/app-tooling",
+    "@criblio/app-tooling": "file:../cribl-search-app-framework/packages/app-tooling",
     "@eslint/js": "^9.39.4",
     "@playwright/test": "^1.45.0",
     "@types/node": "^22.0.0",

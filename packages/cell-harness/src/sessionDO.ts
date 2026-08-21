@@ -24,7 +24,7 @@
  * DO; a generic rename (subject_id/group_key) rides a future
  * SCHEMA_VERSION migration.
  */
-import type { AgentToolDefinition } from '@cribl/app-utils/agent';
+import type { AgentToolDefinition } from '@criblio/app-utils/agent';
 import {
   RepoStore,
   createCodeToolExecutors,
