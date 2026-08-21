@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
-import type { AgentToolDefinition } from '@cribl/app-utils/agent';
+import type { AgentToolDefinition } from '@criblio/app-utils/agent';
 import type { WireLoopEvent } from '@criblio/agent-protocol';
 import { runRealTurn } from '../realTurn';
 

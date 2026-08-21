@@ -1,6 +1,6 @@
 {
-  "name": "@cribl/app-utils",
-  "version": "0.4.0",
+  "name": "@criblio/app-utils",
+  "version": "0.5.0",
   "type": "module",
   "main": "src/index.ts",
   "exports": {
@@ -77,5 +77,14 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/criblio/cribl-search-app-framework.git",
+    "directory": "packages/app-utils"
   }
 }

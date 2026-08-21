@@ -1,6 +1,6 @@
 {
-  "name": "@cribl/app-tooling",
-  "version": "0.1.0",
+  "name": "@criblio/app-tooling",
+  "version": "0.2.0",
   "type": "module",
   "description": "Deterministic package, deployment, release, and security tooling for Cribl Apps",
   "exports": {
@@ -26,5 +26,14 @@
   "engines": {
     "node": ">=22.13.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/criblio/cribl-search-app-framework.git",
+    "directory": "packages/app-tooling"
+  }
 }

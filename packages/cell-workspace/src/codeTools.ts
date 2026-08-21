@@ -7,11 +7,11 @@
  * checked-out repos in the DO's RepoStore. Never wired into the browser
  * client Investigator — code lives only on the cell.
  */
-import type { AgentToolDefinition } from '@cribl/app-utils/agent';
+import type { AgentToolDefinition } from '@criblio/app-utils/agent';
 import type {
   ToolCallInvocation,
   ToolExecutionResult,
-} from '@cribl/app-utils/agent-tools';
+} from '@criblio/app-utils/agent-tools';
 import type { RepoStore } from './repoStore';
 import { checkoutRepo, resolveRepoForService, type RepoConfig } from './checkout';
 

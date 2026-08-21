@@ -25,7 +25,7 @@ import type {
   Model,
 } from '@earendil-works/pi-ai';
 import { Agent, type AgentTool, type StreamFn } from '@earendil-works/pi-agent-core';
-import type { AgentToolDefinition } from '@cribl/app-utils/agent';
+import type { AgentToolDefinition } from '@criblio/app-utils/agent';
 import type { ToolExecutors } from './payload';
 import type { WireLoopEvent } from '@criblio/agent-protocol';
 import { mapPiEvent, toolCallsOf } from './loopEventMap';

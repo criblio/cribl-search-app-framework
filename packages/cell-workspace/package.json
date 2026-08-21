@@ -2,25 +2,34 @@
   "name": "@criblio/cell-workspace",
   "version": "0.1.0",
   "type": "module",
-  "description": "Source-code workspace for cells (server-side agents on celld): lazy tarball checkout into Durable Object SQLite plus the read-only code tools over it. Worker-native — no filesystem, no subprocess.",
+  "description": "Source-code workspace for cells (server-side agents on celld): lazy tarball checkout into Durable Object SQLite plus the read-only code tools over it. Worker-native \u2014 no filesystem, no subprocess.",
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@criblio/agent-protocol": "file:../agent-protocol"
+    "@criblio/agent-protocol": "^0.1.0"
   },
   "peerDependencies": {
-    "@cribl/app-utils": "*"
+    "@criblio/app-utils": "*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250705.0",
-    "@cribl/app-utils": "file:../app-utils",
     "typescript": "^6.0.3",
-    "vitest": "^3.2.7"
+    "vitest": "^3.2.7",
+    "@criblio/app-utils": "^0.5.0"
   },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/criblio/cribl-search-app-framework.git",
+    "directory": "packages/cell-workspace"
   }
 }
