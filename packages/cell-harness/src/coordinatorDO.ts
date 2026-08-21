@@ -10,7 +10,7 @@
  *   - a per-hour admission cap as a runaway backstop,
  *   - the investigations index the UI lists.
  */
-import type { CellEnv } from './env';
+import type { CellDOClass, CellEnv } from './env';
 import type { CellPayload } from './payload';
 import {
   titleFromPrompt,
@@ -36,7 +36,7 @@ const ORPHAN_RECLAIM_MS = 20 * 60_000;
  */
 export function makeCoordinatorDO<TTrigger, TEnv extends CellEnv>(
   payload: CellPayload<TTrigger, TEnv>,
-) {
+): CellDOClass<TEnv> {
   return class CoordinatorDO {
   private readonly state: DurableObjectState;
   private readonly env: TEnv;

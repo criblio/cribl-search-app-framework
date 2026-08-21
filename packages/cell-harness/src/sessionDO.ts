@@ -32,7 +32,7 @@ import {
   codeToolsAddendum,
   type RepoConfig,
 } from '@criblio/cell-workspace';
-import type { CellEnv } from './env';
+import type { CellDOClass, CellEnv } from './env';
 import type { CellPayload, LifecycleEvent, ToolExecutors } from './payload';
 import {
   PROTOCOL_VERSION,
@@ -153,7 +153,7 @@ interface StartBody<TTrigger> {
  */
 export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
   payload: CellPayload<TTrigger, TEnv>,
-) {
+): CellDOClass<TEnv> {
   return class SessionDO {
   private readonly state: DurableObjectState;
   private readonly env: TEnv;
