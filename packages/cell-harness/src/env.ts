@@ -22,6 +22,9 @@ export interface CellEnv {
    *  Feature-level on/off belongs app-side (e.g. whether the notify
    *  search exists at all). */
   DISABLED?: string;
+  /** Per-message turn budget for interactive sessions (default 12).
+   *  Coding payloads set this high — their sessions run long. */
+  TURN_BUDGET?: string;
 
   // ── Real agent mode (LLM_BASE_URL present ⇒ real loop; absent ⇒
   //    the payload's stub agent, so configless smokes keep passing) ──

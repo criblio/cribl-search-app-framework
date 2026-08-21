@@ -49,8 +49,15 @@ import type { Message, UserMessage } from '@earendil-works/pi-ai';
 
 const TURN_DELAY_MS = 1_000;
 const SCHEMA_VERSION = 1;
-/** Parity with the client loop's cap (framework agent-loop.ts). */
+/** Parity with the client loop's cap (framework agent-loop.ts).
+ *  Overridable per cell via env.TURN_BUDGET — coding payloads run far
+ *  longer interactive sessions than the investigator's 12. */
 const MAX_TURNS = 12;
+
+function turnBudgetOf(env: { TURN_BUDGET?: string }): number {
+  const n = Number(env.TURN_BUDGET);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : MAX_TURNS;
+}
 /** Watchdog alarm delay — must exceed runRealTurn's whole-turn timeout
  *  (180s) plus margin, so it only fires when a turn's isolate died
  *  mid-run rather than racing a healthy turn. */
@@ -400,7 +407,7 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
         Date.now(),
         SCHEMA_VERSION,
         title,
-        MAX_TURNS,
+        turnBudgetOf(this.env),
       );
       // The opening prompt + context; consumed once by
       // ensureSeededInteractive() on the first alarm.
@@ -446,7 +453,7 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
       this.state.storage.sql.exec(
         `UPDATE investigation
            SET turn_budget = ?, mode = 'interactive', concluded_at = NULL, error = NULL`,
-        turn + MAX_TURNS,
+        turn + turnBudgetOf(this.env),
       );
       this.setStatus('running', { started_at: Date.now() });
       await this.notifyCoordinator('resumed');
@@ -739,13 +746,14 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
     try {
       // Turn cap. Interactive uses a per-message budget and PARKS
       // (stays resumable) when it's hit; autonomous fails the run.
-      const cap = interactive ? Number(row.turn_budget ?? MAX_TURNS) : MAX_TURNS;
+      const budget = turnBudgetOf(this.env);
+      const cap = interactive ? Number(row.turn_budget ?? budget) : MAX_TURNS;
       if (turn >= cap) {
         if (interactive) {
           this.append({
             kind: 'notification',
             turnId: 'system',
-            content: `Reached the ${MAX_TURNS}-step limit for this message. Ask a follow-up to continue.`,
+            content: `Reached the ${budget}-step limit for this message. Ask a follow-up to continue.`,
           });
           this.append({ kind: 'done', reason: 'complete' });
           await this.parkIdle();
@@ -764,7 +772,10 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
         // ── real mode: one pi turn per alarm ──
         if (interactive) await this.ensureSeededInteractive();
         else await this.ensureSeeded(trigger!);
-        const domain = payload.createTools(this.env);
+        const domain = payload.createTools(
+          this.env,
+          this.state.storage.sql as unknown as Parameters<typeof payload.createTools>[1],
+        );
         // Server-only code tools, offered only when repos are configured.
         // Interactive investigations carry their own repos (from app
         // Settings); autonomous ones fall back to the cell's REPOS_JSON.
