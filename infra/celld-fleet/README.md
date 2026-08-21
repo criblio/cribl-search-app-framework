@@ -47,6 +47,34 @@ aws ssm put-parameter --name /my-cell/UI_BEARER --type SecureString --value "…
 Boot reads exactly `secret_env_keys` and fails loudly on a missing
 parameter. `plain_env` values land in state — secrets never go there.
 
+## Adopting the module in an existing stack
+
+A stack that predates the module (APM's `cell/infra` is the first)
+migrates its state addresses with `moved` blocks — resources shift
+from the root into `module.fleet.*` without being destroyed:
+
+```hcl
+moved { from = aws_s3_bucket.fleet, to = module.fleet.aws_s3_bucket.fleet }
+moved { from = aws_instance.cell,   to = module.fleet.aws_instance.cell }
+# …one per resource, including the `aws_iam_role_policy_attachment`
+```
+
+Two plan hazards when adopting:
+
+- **The instance is replaced**, once, because the generalized
+  `user_data` differs textually and `user_data_replace_on_change =
+  true`. That is the designed path — durable state is in the bucket
+  and the EIP is a separate resource, so the URL survives. Do it in
+  a quiet window.
+- **Cosmetic string drift must not force replacement.** A security
+  group's `description` is create-time, and the group's name is
+  derived from `cell_name`, so changing the description is a
+  same-name destroy/create that fights the attached instance. Set
+  `security_group_description` to the stack's existing value instead
+  of accepting the churn. Any future cosmetic string in a create-time
+  argument should grow the same kind of override rather than forcing
+  consumers to rebuild attached resources.
+
 ## Shipping cell code
 
 `terraform apply` provisions the node but does **not** ship code;

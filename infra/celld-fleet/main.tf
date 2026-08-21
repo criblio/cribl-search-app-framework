@@ -111,7 +111,7 @@ data "aws_vpc" "default" {
 
 resource "aws_security_group" "cell" {
   name        = local.node_name
-  description = "celld cell node: HTTPS in (webhooks + platform proxy), no SSH (use SSM Session Manager)."
+  description = var.security_group_description
   vpc_id      = data.aws_vpc.default.id
 
   ingress {

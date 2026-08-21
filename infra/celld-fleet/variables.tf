@@ -38,6 +38,12 @@ variable "ssm_parameter_prefix" {
   default     = ""
 }
 
+variable "security_group_description" {
+  description = "Description of the node security group. Overridable ONLY because a security group's description is create-time: changing it forces replacement, and since the group's name is derived from cell_name, the replacement is a same-name destroy/create that fights the attached instance. A pre-module stack adopting this module sets its existing description here to keep the plan clean. New stacks should leave the default."
+  type        = string
+  default     = "celld cell node: HTTPS in (webhooks + platform proxy), no SSH (use SSM Session Manager)."
+}
+
 variable "secret_env_keys" {
   description = "SSM SecureString names (under the prefix) pulled onto the node at boot as CELLD_VAR_<key>. Boot fails loudly on a missing parameter, so list exactly what the cell needs."
   type        = list(string)
