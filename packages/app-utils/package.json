@@ -1,36 +1,36 @@
 {
   "name": "@criblio/app-utils",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "./dist/index.js",
   "exports": {
-    ".": "./src/index.ts",
-    "./search": "./src/search.ts",
-    "./metrics": "./src/metrics.ts",
-    "./query-generation": "./src/query-generation.ts",
-    "./viz": "./src/viz/index.ts",
-    "./search-job": "./src/search-job.ts",
-    "./kql": "./src/kql.ts",
-    "./agent": "./src/agent.ts",
-    "./agent-loop": "./src/agent-loop.ts",
-    "./agent-tools": "./src/agent-tools.ts",
-    "./investigator": "./src/investigator/index.ts",
-    "./investigator/metrics-tool-card": "./src/investigator/MetricsToolCard.tsx",
-    "./resilience-boundary": "./src/ResilienceBoundary.tsx",
-    "./auth": "./src/auth.ts",
-    "./settings": "./src/settings.ts",
-    "./dotenv": "./src/dotenv.ts",
-    "./provisioner": "./src/provisioner.ts",
-    "./dataset-provisioner": "./src/dataset-provisioner.ts",
-    "./cadence": "./src/cadence.ts",
-    "./provisioning-panel": "./src/ProvisioningPanel.tsx",
-    "./cadence-picker": "./src/CadencePicker.tsx",
-    "./dataset": "./src/dataset.ts",
-    "./dataset-provider": "./src/DatasetProvider.tsx",
-    "./provisioning-banner": "./src/ProvisioningBanner.tsx",
-    "./styles/tokens.css": "./src/styles/tokens.css",
-    "./styles/base.css": "./src/styles/base.css",
-    "./graph": "./src/graph/index.ts"
+    ".": "./dist/index.js",
+    "./search": "./dist/search.js",
+    "./metrics": "./dist/metrics.js",
+    "./query-generation": "./dist/query-generation.js",
+    "./viz": "./dist/viz/index.js",
+    "./search-job": "./dist/search-job.js",
+    "./kql": "./dist/kql.js",
+    "./agent": "./dist/agent.js",
+    "./agent-loop": "./dist/agent-loop.js",
+    "./agent-tools": "./dist/agent-tools.js",
+    "./investigator": "./dist/investigator/index.js",
+    "./investigator/metrics-tool-card": "./dist/investigator/MetricsToolCard.js",
+    "./resilience-boundary": "./dist/ResilienceBoundary.js",
+    "./auth": "./dist/auth.js",
+    "./settings": "./dist/settings.js",
+    "./dotenv": "./dist/dotenv.js",
+    "./provisioner": "./dist/provisioner.js",
+    "./dataset-provisioner": "./dist/dataset-provisioner.js",
+    "./cadence": "./dist/cadence.js",
+    "./provisioning-panel": "./dist/ProvisioningPanel.js",
+    "./cadence-picker": "./dist/CadencePicker.js",
+    "./dataset": "./dist/dataset.js",
+    "./dataset-provider": "./dist/DatasetProvider.js",
+    "./provisioning-banner": "./dist/ProvisioningBanner.js",
+    "./styles/tokens.css": "./dist/styles/tokens.css",
+    "./styles/base.css": "./dist/styles/base.css",
+    "./graph": "./dist/graph/index.js"
   },
   "peerDependencies": {
     "d3-array": "^3.2.0",
@@ -76,7 +76,9 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json && cd src && find . -name '*.css' -exec cp --parents {} ../dist/ \\;",
+    "prepack": "npm run build"
   },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com",
@@ -86,5 +88,9 @@
     "type": "git",
     "url": "git+https://github.com/criblio/cribl-search-app-framework.git",
     "directory": "packages/app-utils"
-  }
+  },
+  "files": [
+    "dist",
+    "src"
+  ]
 }

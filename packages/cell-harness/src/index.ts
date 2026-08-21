@@ -23,7 +23,7 @@ export { makeSessionDO, capEvent } from './sessionDO';
 export { mintTicket, verifyTicket } from './tickets';
 export { runRealTurn, type LlmConfig, type RealTurnResult } from './realTurn';
 export { mapPiEvent, toolCallsOf } from './loopEventMap';
-export type { CellEnv } from './env';
+export type { CellDOClass, CellEnv } from './env';
 export type {
   CellPayload,
   InteractiveInput,

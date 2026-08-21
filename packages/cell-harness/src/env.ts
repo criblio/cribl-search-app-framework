@@ -40,3 +40,18 @@ export interface CellEnv {
   /** GitHub token for checking out private repos (optional). */
   GITHUB_TOKEN?: string;
 }
+
+/**
+ * The class shape the DO factories return. Declared explicitly so
+ * declaration emit doesn't have to name the factory's anonymous class
+ * (TS4094: private members can't appear on an exported anonymous
+ * class type) — and consumers only ever need "a DO class" anyway.
+ */
+export type CellDOClass<TEnv extends CellEnv = CellEnv> = new (
+  state: DurableObjectState,
+  env: TEnv,
+) => {
+  fetch(request: Request): Promise<Response>;
+  alarm(): Promise<void>;
+  webSocketMessage?(ws: WebSocket): Promise<void>;
+};

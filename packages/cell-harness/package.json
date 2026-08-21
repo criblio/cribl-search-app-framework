@@ -1,15 +1,15 @@
 {
   "name": "@criblio/cell-harness",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Generic server-side agent harness for cells (Worker + Durable Objects on celld): payload seam, coordinator + session DO factories, router/auth/tickets, pi-agent-core turn runner.",
-  "main": "src/index.ts",
+  "main": "./dist/index.js",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./dist/index.js"
   },
   "dependencies": {
-    "@criblio/agent-protocol": "^0.1.0",
-    "@criblio/cell-workspace": "^0.1.0",
+    "@criblio/agent-protocol": "^0.1.1",
+    "@criblio/cell-workspace": "^0.1.1",
     "@earendil-works/pi-agent-core": "^0.84.2",
     "@earendil-works/pi-ai": "^0.84.2"
   },
@@ -20,11 +20,13 @@
     "@cloudflare/workers-types": "^4.20250705.0",
     "typescript": "^6.0.3",
     "vitest": "^3.2.7",
-    "@criblio/app-utils": "^0.5.0"
+    "@criblio/app-utils": "^0.5.1"
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build"
   },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com",
@@ -34,5 +36,9 @@
     "type": "git",
     "url": "git+https://github.com/criblio/cribl-search-app-framework.git",
     "directory": "packages/cell-harness"
-  }
+  },
+  "files": [
+    "dist",
+    "src"
+  ]
 }
