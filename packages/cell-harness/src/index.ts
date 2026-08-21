@@ -28,6 +28,7 @@ export type {
   CellPayload,
   InteractiveInput,
   LifecycleEvent,
+  PayloadSqlHandle,
   SeedResult,
   StubTurn,
   ToolExecutors,
