@@ -24,6 +24,8 @@ npm run dev
 | `@cribl/app-utils` | Search jobs, KQL safety, OAuth, settings, containment, CSS tokens |
 | `@cribl/app-tooling` | Deterministic packaging, inspection, deployment, release evidence, security gates |
 | `@criblio/agent-protocol` | Wire protocol between a cell (server-side agent harness on celld) and its app UI — loop events, server frames, session statuses. No runtime deps. (New packages use the `@criblio` scope — the GitHub Packages publishing target.) |
+| `@criblio/cell-harness` | Generic server-side agent harness for cells: payload seam, coordinator + session DO factories, router/auth/tickets, pi-agent-core turn runner |
+| `@criblio/cell-workspace` | Cell source-code workspace: lazy tarball checkout into DO SQLite + read-only code tools (worker-native) |
 
 ## Apps built on this framework
 

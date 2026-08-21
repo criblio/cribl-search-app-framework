@@ -1,0 +1,29 @@
+{
+  "name": "@criblio/cell-harness",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Generic server-side agent harness for cells (Worker + Durable Objects on celld): payload seam, coordinator + session DO factories, router/auth/tickets, pi-agent-core turn runner.",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@criblio/agent-protocol": "file:../agent-protocol",
+    "@criblio/cell-workspace": "file:../cell-workspace",
+    "@earendil-works/pi-agent-core": "^0.84.2",
+    "@earendil-works/pi-ai": "^0.84.2"
+  },
+  "peerDependencies": {
+    "@cribl/app-utils": "*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250705.0",
+    "@cribl/app-utils": "file:../app-utils",
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.7"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  }
+}
