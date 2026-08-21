@@ -77,7 +77,7 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "build": "tsc -p tsconfig.build.json && mkdir -p dist/styles dist/investigator && cp src/styles/*.css dist/styles/ && cp src/investigator/*.module.css dist/investigator/",
+    "build": "tsc -p tsconfig.build.json && cd src && find . -name '*.css' -exec cp --parents {} ../dist/ \\;",
     "prepack": "npm run build"
   },
   "publishConfig": {
