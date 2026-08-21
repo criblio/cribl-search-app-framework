@@ -27,6 +27,9 @@ jobs:
       - run: npm ci
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Dependency-ordered build so each package's prepack (which
+      # rebuilds it) can resolve its siblings' d.ts output.
+      - run: npm run build
       - name: Publish missing versions
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

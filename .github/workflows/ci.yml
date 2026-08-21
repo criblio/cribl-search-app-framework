@@ -19,9 +19,9 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      # Build first: package exports point at dist, so cross-package
-      # imports (cell-* -> app-utils types) need built output.
-      - run: npm run build --workspaces --if-present
+      # Build first, in dependency order (alphabetical workspace order
+      # builds cell-harness before the cell-workspace d.ts it imports).
+      - run: npm run build
       - run: npm test --workspaces --if-present
       - run: npm run typecheck --workspaces --if-present
       - run: npm run audit --workspaces --if-present
