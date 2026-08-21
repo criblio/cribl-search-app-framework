@@ -35,7 +35,16 @@ runs:
       shell: bash
       env:
         NODE_AUTH_TOKEN: ${{ inputs.registry-token }}
-      run: npm ci
+      run: |
+        set -euo pipefail
+        # Registry mode: the app's committed .npmrc routes the @criblio
+        # scope; append the (env-substituted) auth line here so npm can
+        # actually authenticate. Appended to the checkout only — never
+        # committed.
+        if [ -n "$NODE_AUTH_TOKEN" ]; then
+          echo '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' >> .npmrc
+        fi
+        npm ci
     - name: Verify source
       shell: bash
       run: npm run verify
