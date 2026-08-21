@@ -102,28 +102,32 @@ export async function checkoutRepo(
   store.beginRepo(name);
   await gunzipUntarEach(resp.body, (entry) => store.addFile(name, entry, stats, signal));
   store.finalizeRepo(name, stats);
-  store.writeFile(
-    name,
-    RECENT_COMMITS_PATH,
-    await fetchRecentCommits(owner, repo, ref, token, signal),
-  );
+  const recent = await fetchRecentCommits(owner, repo, ref, token, signal);
+  store.writeFile(name, RECENT_COMMITS_PATH, recent.markdown);
+  // Origin (incl. the head sha the same commits call returned) is what
+  // the git write-back pushes against — see gitPush.ts.
+  store.setOrigin(name, { owner, repo, ref: ref ?? null, sha: recent.headSha });
   return stats;
 }
 
-/** Fetch recent commits and format them as markdown for the tree. */
+/** Fetch recent commits: markdown for the tree + the head sha (the
+ *  write-back's base commit). Best-effort — failures degrade to a
+ *  placeholder markdown and a null sha (gitPush re-resolves). */
 async function fetchRecentCommits(
   owner: string,
   repo: string,
   ref: string | undefined,
   token?: string,
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<{ markdown: string; headSha: string | null }> {
   const url = new URL(`${GITHUB_API}/repos/${owner}/${repo}/commits`);
   url.searchParams.set('per_page', String(COMMIT_COUNT));
   if (ref) url.searchParams.set('sha', ref);
   try {
     const resp = await fetch(url.toString(), { headers: authHeaders(token), signal });
-    if (!resp.ok) return `# Recent commits\n\n(could not fetch: HTTP ${resp.status})\n`;
+    if (!resp.ok) {
+      return { markdown: `# Recent commits\n\n(could not fetch: HTTP ${resp.status})\n`, headSha: null };
+    }
     const commits = (await resp.json()) as Array<{
       sha: string;
       commit: { message: string; author?: { name?: string; date?: string } };
@@ -134,8 +138,14 @@ async function fetchRecentCommits(
       const when = c.commit.author?.date ?? '';
       return `- \`${c.sha.slice(0, 7)}\` ${subject} — ${who}${when ? `, ${when}` : ''}`;
     });
-    return `# Recent commits (${owner}/${repo})\n\n${lines.join('\n')}\n`;
+    return {
+      markdown: `# Recent commits (${owner}/${repo})\n\n${lines.join('\n')}\n`,
+      headSha: commits[0]?.sha ?? null,
+    };
   } catch (err) {
-    return `# Recent commits\n\n(error: ${err instanceof Error ? err.message : String(err)})\n`;
+    return {
+      markdown: `# Recent commits\n\n(error: ${err instanceof Error ? err.message : String(err)})\n`,
+      headSha: null,
+    };
   }
 }

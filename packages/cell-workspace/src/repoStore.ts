@@ -85,6 +85,22 @@ export interface GrepMatch {
   text: string;
 }
 
+/** Where a checkout came from — what the git write-back pushes to. */
+export interface RepoOrigin {
+  owner: string;
+  repo: string;
+  /** The branch/ref checked out (null ⇒ the repo's default branch). */
+  ref: string | null;
+  /** Head commit sha at checkout time (the PR branch's parent). */
+  sha: string | null;
+}
+
+/** A file the agent created/modified since checkout. */
+export interface DirtyFile {
+  path: string;
+  content: string;
+}
+
 // Minimal shape of the DO's SQLite handle we use (avoids importing the
 // full workers-types surface here).
 interface Sql {
@@ -102,6 +118,7 @@ export class RepoStore {
     this.sql.exec(
       `CREATE TABLE IF NOT EXISTS repo_files (
          repo TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL,
+         dirty INTEGER NOT NULL DEFAULT 0,
          PRIMARY KEY (repo, path)
        )`,
     );
@@ -111,6 +128,21 @@ export class RepoStore {
          file_count INTEGER NOT NULL
        )`,
     );
+    // Additive columns on pre-existing DOs (SQLite lacks ADD COLUMN IF
+    // NOT EXISTS; a duplicate-column error means already migrated).
+    for (const decl of [
+      'repo_files ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0',
+      'repo_meta ADD COLUMN origin_owner TEXT',
+      'repo_meta ADD COLUMN origin_repo TEXT',
+      'repo_meta ADD COLUMN origin_ref TEXT',
+      'repo_meta ADD COLUMN origin_sha TEXT',
+    ]) {
+      try {
+        this.sql.exec(`ALTER TABLE ${decl}`);
+      } catch {
+        /* column already exists */
+      }
+    }
   }
 
   /** True if this repo has already been checked out this investigation. */
@@ -200,14 +232,84 @@ export class RepoStore {
     return stats;
   }
 
-  /** Write a synthetic file (e.g. RECENT_COMMITS.md) into the store. */
+  /** Write a synthetic file (e.g. RECENT_COMMITS.md) into the store.
+   *  NOT marked dirty — synthetic files never ride a write-back. */
   writeFile(repo: string, path: string, content: string): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO repo_files (repo, path, content) VALUES (?, ?, ?)`,
+      `INSERT OR REPLACE INTO repo_files (repo, path, content, dirty) VALUES (?, ?, ?, 0)`,
       repo,
       path,
       content.slice(0, MAX_FILE_BYTES),
     );
+  }
+
+  /** An agent write (write_file / edit_file): stored dirty so the git
+   *  write-back knows what changed. Throws on oversized content — a
+   *  write must never be silently truncated. */
+  agentWrite(repo: string, path: string, content: string): void {
+    if (content.length > MAX_FILE_BYTES) {
+      throw new Error(
+        `content is ${content.length} bytes — the per-file cap is ${MAX_FILE_BYTES}. Split the file.`,
+      );
+    }
+    const clean = path.replace(/^\//, '');
+    if (!clean || clean.includes('..')) {
+      throw new Error(`invalid path "${path}"`);
+    }
+    this.sql.exec(
+      `INSERT OR REPLACE INTO repo_files (repo, path, content, dirty) VALUES (?, ?, ?, 1)`,
+      repo,
+      clean,
+      content,
+    );
+  }
+
+  /** Files the agent created/modified since checkout, with content.
+   *  Read one at a time (same in-memory-cap discipline as readFile). */
+  dirtyFiles(repo: string): DirtyFile[] {
+    const paths = this.sql
+      .exec(`SELECT path FROM repo_files WHERE repo = ? AND dirty = 1 ORDER BY path`, repo)
+      .toArray()
+      .map((r) => String(r.path));
+    const out: DirtyFile[] = [];
+    for (const path of paths) {
+      const content = this.readFile(repo, path);
+      if (content != null) out.push({ path, content });
+    }
+    return out;
+  }
+
+  /** Record where a checkout came from (checkout.ts calls this once
+   *  the head sha is known). */
+  setOrigin(repo: string, origin: RepoOrigin): void {
+    this.sql.exec(
+      `UPDATE repo_meta SET origin_owner = ?, origin_repo = ?, origin_ref = ?, origin_sha = ?
+       WHERE repo = ?`,
+      origin.owner,
+      origin.repo,
+      origin.ref,
+      origin.sha,
+      repo,
+    );
+  }
+
+  /** The checkout's origin (null if the repo isn't checked out or
+   *  predates origin tracking). */
+  origin(repo: string): RepoOrigin | null {
+    const rows = this.sql
+      .exec(
+        `SELECT origin_owner, origin_repo, origin_ref, origin_sha FROM repo_meta WHERE repo = ? LIMIT 1`,
+        repo,
+      )
+      .toArray();
+    const r = rows[0];
+    if (!r || r.origin_owner == null || r.origin_repo == null) return null;
+    return {
+      owner: String(r.origin_owner),
+      repo: String(r.origin_repo),
+      ref: r.origin_ref == null ? null : String(r.origin_ref),
+      sha: r.origin_sha == null ? null : String(r.origin_sha),
+    };
   }
 
   /** Immediate children (files + dirs) under `dir` within `repo`. */
