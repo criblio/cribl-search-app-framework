@@ -24,6 +24,19 @@ import type {
 import type { CellEnv } from './env';
 import type { WireLoopEvent } from '@criblio/agent-protocol';
 
+/** Minimal shape of the DO's SQLite handle, passed to createTools so
+ *  storage-backed payloads (the coding payload's workspace) can build
+ *  their tools without the harness importing workers-types here. */
+export interface PayloadSqlHandle {
+  exec(
+    query: string,
+    ...bindings: unknown[]
+  ): {
+    toArray(): Record<string, unknown>[];
+    one(): Record<string, unknown>;
+  };
+}
+
 /** The executor surface the turn runner calls. Structurally identical
  *  to the app's ApmToolExecutors — the framework types are the shared
  *  contract. Executors report tool failures as explanatory `content`
@@ -113,8 +126,13 @@ export interface CellPayload<TTrigger, TEnv extends CellEnv = CellEnv> {
 
   /** The domain tools for a turn. Called only when ready(env). The
    *  harness composes its own server-only tools (the workspace code
-   *  tools) on top. */
-  createTools(env: TEnv): {
+   *  tools) on top. `sql` is the session DO's SQLite handle for
+   *  storage-backed payloads (e.g. a coding payload's workspace);
+   *  API-backed payloads ignore it. */
+  createTools(
+    env: TEnv,
+    sql?: PayloadSqlHandle,
+  ): {
     definitions: AgentToolDefinition[];
     executors: ToolExecutors;
   };

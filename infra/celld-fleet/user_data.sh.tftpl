@@ -1,0 +1,149 @@
+#!/bin/bash
+# cloud-init for a celld node. Idempotent-ish: safe to re-run on a
+# replacement instance; all durable state lives in the fleet bucket.
+set -euo pipefail
+exec > >(tee "/var/log/${cell_name}-init.log") 2>&1
+
+CELLD_VERSION="${celld_version}"
+BUCKET="${bucket}"
+REGION="${region}"
+DOMAIN="${domain}"
+SSM_PREFIX="${ssm_prefix}"
+SECRET_KEYS="${secret_keys}"
+REQUIRED_KEYS="${required_secret_keys}"
+
+# ── celld binary (pinned release) ────────────────────────────────
+curl -fsSL -o /tmp/celld.gz \
+  "https://github.com/denoland/celld/releases/download/$CELLD_VERSION/celld-aarch64-unknown-linux-gnu.gz"
+gunzip -f /tmp/celld.gz
+install -m 0755 /tmp/celld /usr/local/bin/celld
+/usr/local/bin/celld --version
+
+# ── secrets: SSM SecureStrings → env file (root-only) ────────────
+# Parameters are created out-of-band (see the module README), never in
+# Terraform state.
+#
+# A key listed in required_secret_keys must resolve or boot aborts — it
+# gates something with no working degraded mode (UI_BEARER, say: without
+# it every route is closed, so the node comes up unusable, which is worse
+# than not coming up). Every other key is best-effort. Cells are written
+# to degrade per feature — a tool whose credential is absent returns
+# "not configured" guidance the agent can route around — and aborting
+# boot over one optional credential throws that away to brick the node:
+# nothing past this loop runs, so there's no celld and no Caddy either.
+# Skipped keys are logged and listed in /etc/celld/missing-secrets.
+umask 077
+mkdir -p /etc/celld
+: > /etc/celld/env
+: > /etc/celld/missing-secrets
+for key in $SECRET_KEYS; do
+  # `|| true` so a get-parameter failure doesn't trip `set -e` before we
+  # can decide whether this key was required.
+  value=$(aws ssm get-parameter --region "$REGION" \
+    --name "$SSM_PREFIX/$key" --with-decryption \
+    --query Parameter.Value --output text 2>/tmp/ssm-err) || true
+  if [ -z "$value" ]; then
+    # grep -x against one-per-line: substring matching would let
+    # TOKEN satisfy a requirement for GITHUB_TOKEN.
+    if printf '%s\n' $REQUIRED_KEYS | grep -qxF "$key"; then
+      echo "FATAL: required secret $SSM_PREFIX/$key is missing or empty." >&2
+      cat /tmp/ssm-err >&2
+      exit 1
+    fi
+    echo "WARNING: optional secret $SSM_PREFIX/$key is missing — whatever it gates will report itself unconfigured." >&2
+    cat /tmp/ssm-err >&2
+    echo "$key" >> /etc/celld/missing-secrets
+    continue
+  fi
+  echo "CELLD_VAR_$key=$value" >> /etc/celld/env
+done
+# Non-secret cell config (from the module's plain_env map).
+cat >> /etc/celld/env <<'PLAIN_EOF'
+${plain_env_lines}
+PLAIN_EOF
+cat >> /etc/celld/env <<EOF
+CELLD_BUCKET=s3://$BUCKET
+AWS_REGION=$REGION
+CELLD_ADDR=127.0.0.1:8787
+CELLD_WATCH=/var/lib/celld
+# Write-ack posture (v0.3.0+). Pinned explicitly rather than left to the
+# default so a future celld default change can't silently move it. On a
+# single node `fleet` is identical to sync-to-bucket (no peers ⇒ no
+# record, no shipper, bucket-proven acks) and upgrades itself when a peer
+# joins; see the celld_durability variable.
+CELLD_DURABILITY=${celld_durability}
+# Per-request JS handler budget. Blowing it kills the celld PROCESS, so
+# every session on the node dies — pinned so it's visible, not implicit.
+CELLD_HANDLER_BUDGET_S=${celld_handler_budget_s}
+EOF
+mkdir -p /var/lib/celld
+
+# ── systemd unit: graceful stop is load-bearing ──────────────────
+# SIGTERM drains cell replication to the bucket; a hard kill can
+# lose the last seconds of writes (S2 spike). TimeoutStopSec gives
+# the drain room before systemd escalates.
+cat > /etc/systemd/system/celld.service <<EOF
+[Unit]
+Description=celld — ${cell_name} node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/celld/env
+ExecStart=/usr/local/bin/celld
+Restart=always
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=90
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now celld
+
+# ── Caddy: TLS termination + reverse proxy ───────────────────────
+# AL2023 has no `caddy` package (dnf: "Unable to find a match"), so we
+# install the official static binary and write our own unit. Caddy
+# handles ACME itself on the first request to $DOMAIN.
+if [ -n "$DOMAIN" ]; then
+  CADDY_VERSION="${caddy_version}"
+  curl -fsSL -o /tmp/caddy.tar.gz \
+    "https://github.com/caddyserver/caddy/releases/download/v$CADDY_VERSION/caddy_$${CADDY_VERSION}_linux_arm64.tar.gz"
+  tar -xzf /tmp/caddy.tar.gz -C /tmp caddy
+  install -m 0755 /tmp/caddy /usr/local/bin/caddy
+  /usr/local/bin/caddy version
+
+  mkdir -p /etc/caddy /var/lib/caddy
+  cat > /etc/caddy/Caddyfile <<EOF
+$DOMAIN {
+	reverse_proxy 127.0.0.1:8787
+}
+EOF
+
+  cat > /etc/systemd/system/caddy.service <<'EOF'
+[Unit]
+Description=Caddy — TLS termination for the cell node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment=XDG_DATA_HOME=/var/lib
+ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
+Restart=always
+RestartSec=2
+User=root
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now caddy
+else
+  echo "No domain set — skipping Caddy. celld listens on 127.0.0.1:8787 only." >&2
+fi

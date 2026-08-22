@@ -49,12 +49,39 @@ import type { Message, UserMessage } from '@earendil-works/pi-ai';
 
 const TURN_DELAY_MS = 1_000;
 const SCHEMA_VERSION = 1;
-/** Parity with the client loop's cap (framework agent-loop.ts). */
+/** Parity with the client loop's cap (framework agent-loop.ts).
+ *  Overridable per cell via env.TURN_BUDGET — coding payloads run far
+ *  longer interactive sessions than the investigator's 12. */
 const MAX_TURNS = 12;
+
+function turnBudgetOf(env: { TURN_BUDGET?: string }): number {
+  const n = Number(env.TURN_BUDGET);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : MAX_TURNS;
+}
 /** Watchdog alarm delay — must exceed runRealTurn's whole-turn timeout
  *  (180s) plus margin, so it only fires when a turn's isolate died
  *  mid-run rather than racing a healthy turn. */
 const TURN_WATCHDOG_MS = 240_000;
+/**
+ * How many times the watchdog will re-run a turn whose isolate died
+ * before giving up on it.
+ *
+ * The watchdog exists to recover a turn whose isolate was evicted
+ * mid-run, but a turn that kills its own isolate — e.g. a tool that
+ * runs past celld's handler budget, taking the whole celld process
+ * down with it — will do so again on retry. Without a bound that is an
+ * unbounded crash loop that restarts the node every TURN_WATCHDOG_MS
+ * and takes every other session on it down too (observed in staging:
+ * one build_app with a huge dependency graph, five celld restarts at
+ * ~240s intervals). Retrying twice covers genuine eviction; the third
+ * strike parks or fails the run with an explanation.
+ *
+ * Durable, not an instance field: the isolate dying is the event being
+ * counted, so the count has to outlive it. Cleared whenever a turn
+ * completes normally.
+ */
+const MAX_WATCHDOG_ATTEMPTS = 3;
+const WATCHDOG_ATTEMPTS_KEY = 'watchdogAttempts';
 
 // Persisted-event size caps. Real staging metrics/search results are
 // far larger than the stub's canned events, and every event is stored
@@ -258,7 +285,7 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
       .exec(
         `SELECT id, alert_id, trigger_event_id, incident_key, status,
                 error, created_at, started_at, concluded_at, turn, schema_version,
-                mode, turn_budget
+                mode, title, turn_budget
          FROM investigation LIMIT 1`,
       )
       .toArray();
@@ -400,7 +427,7 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
         Date.now(),
         SCHEMA_VERSION,
         title,
-        MAX_TURNS,
+        turnBudgetOf(this.env),
       );
       // The opening prompt + context; consumed once by
       // ensureSeededInteractive() on the first alarm.
@@ -446,9 +473,12 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
       this.state.storage.sql.exec(
         `UPDATE investigation
            SET turn_budget = ?, mode = 'interactive', concluded_at = NULL, error = NULL`,
-        turn + MAX_TURNS,
+        turn + turnBudgetOf(this.env),
       );
       this.setStatus('running', { started_at: Date.now() });
+      // A new message is a new attempt at a different thing — don't hold
+      // a previous step's watchdog strikes against it.
+      await this.state.storage.delete(WATCHDOG_ATTEMPTS_KEY);
       await this.notifyCoordinator('resumed');
       await this.state.storage.setAlarm(Date.now() + TURN_DELAY_MS);
       return Response.json({ ok: true });
@@ -467,6 +497,7 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
       this.turnAbort?.abort();
       // Drop the watchdog/next-turn alarm so nothing re-fires the loop.
       await this.state.storage.deleteAlarm();
+      await this.state.storage.delete(WATCHDOG_ATTEMPTS_KEY);
       this.append({ kind: 'notification', turnId: 'system', content: 'Investigation cancelled by the user.' });
       this.append({ kind: 'done', reason: 'aborted' });
       this.setStatus('cancelled', { concluded_at: Date.now() });
@@ -706,6 +737,51 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
     // alarm when it finishes, so bailing here loses nothing.
     if (this.turnInFlight) return;
     this.turnInFlight = true;
+
+    // Count this attempt BEFORE running, and durably: if the turn kills
+    // its isolate there is no code path left to record that it tried.
+    // A turn that completes (or errors in a way we can catch) clears the
+    // counter, so only isolate-killing turns accumulate.
+    const row = this.row();
+    const attempts =
+      row && row.status === 'running'
+        ? ((await this.state.storage.get<number>(WATCHDOG_ATTEMPTS_KEY)) ?? 0) + 1
+        : 0;
+
+    if (attempts > MAX_WATCHDOG_ATTEMPTS) {
+      // Every attempt so far ended with the isolate dying mid-turn.
+      // Retrying again just crash-loops the node, so stop and say so.
+      this.turnInFlight = false;
+      await this.state.storage.deleteAlarm();
+      await this.state.storage.delete(WATCHDOG_ATTEMPTS_KEY);
+      const message =
+        `This step was abandoned after ${MAX_WATCHDOG_ATTEMPTS} attempts: each one ended with ` +
+        `the runtime terminating the isolate mid-turn (usually a tool exceeding the handler ` +
+        `time budget). The step was not retried again to avoid a restart loop.`;
+      this.append({ kind: 'error', message });
+      const interactive = ((row?.mode as SessionMode) ?? 'autonomous') === 'interactive';
+      if (interactive) {
+        this.append({
+          kind: 'notification',
+          turnId: 'system',
+          content: 'Send a follow-up message to try a different approach.',
+        });
+        await this.parkIdle();
+      } else {
+        await this.failRun(message);
+      }
+      return;
+    }
+
+    if (attempts > 0) await this.state.storage.put(WATCHDOG_ATTEMPTS_KEY, attempts);
+    if (attempts > 1) {
+      this.append({
+        kind: 'notification',
+        turnId: 'system',
+        content: `Retrying this step (attempt ${attempts} of ${MAX_WATCHDOG_ATTEMPTS}) — the previous attempt was interrupted mid-turn.`,
+      });
+    }
+
     // Watchdog: the per-turn timeout in runRealTurn recovers a hung LLM
     // or tool while THIS isolate lives, but if celld evicts the isolate
     // mid-turn (e.g. the handler exceeds its budget), the run is left
@@ -716,6 +792,8 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
     await this.state.storage.setAlarm(Date.now() + TURN_WATCHDOG_MS);
     try {
       await this.runTurn();
+      // Survived the turn — whatever happens next is a fresh problem.
+      await this.state.storage.delete(WATCHDOG_ATTEMPTS_KEY);
     } finally {
       this.turnInFlight = false;
     }
@@ -739,13 +817,14 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
     try {
       // Turn cap. Interactive uses a per-message budget and PARKS
       // (stays resumable) when it's hit; autonomous fails the run.
-      const cap = interactive ? Number(row.turn_budget ?? MAX_TURNS) : MAX_TURNS;
+      const budget = turnBudgetOf(this.env);
+      const cap = interactive ? Number(row.turn_budget ?? budget) : MAX_TURNS;
       if (turn >= cap) {
         if (interactive) {
           this.append({
             kind: 'notification',
             turnId: 'system',
-            content: `Reached the ${MAX_TURNS}-step limit for this message. Ask a follow-up to continue.`,
+            content: `Reached the ${budget}-step limit for this message. Ask a follow-up to continue.`,
           });
           this.append({ kind: 'done', reason: 'complete' });
           await this.parkIdle();
@@ -764,7 +843,10 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
         // ── real mode: one pi turn per alarm ──
         if (interactive) await this.ensureSeededInteractive();
         else await this.ensureSeeded(trigger!);
-        const domain = payload.createTools(this.env);
+        const domain = payload.createTools(
+          this.env,
+          this.state.storage.sql as unknown as Parameters<typeof payload.createTools>[1],
+        );
         // Server-only code tools, offered only when repos are configured.
         // Interactive investigations carry their own repos (from app
         // Settings); autonomous ones fall back to the cell's REPOS_JSON.
