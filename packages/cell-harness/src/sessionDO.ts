@@ -62,6 +62,26 @@ function turnBudgetOf(env: { TURN_BUDGET?: string }): number {
  *  (180s) plus margin, so it only fires when a turn's isolate died
  *  mid-run rather than racing a healthy turn. */
 const TURN_WATCHDOG_MS = 240_000;
+/**
+ * How many times the watchdog will re-run a turn whose isolate died
+ * before giving up on it.
+ *
+ * The watchdog exists to recover a turn whose isolate was evicted
+ * mid-run, but a turn that kills its own isolate — e.g. a tool that
+ * runs past celld's handler budget, taking the whole celld process
+ * down with it — will do so again on retry. Without a bound that is an
+ * unbounded crash loop that restarts the node every TURN_WATCHDOG_MS
+ * and takes every other session on it down too (observed in staging:
+ * one build_app with a huge dependency graph, five celld restarts at
+ * ~240s intervals). Retrying twice covers genuine eviction; the third
+ * strike parks or fails the run with an explanation.
+ *
+ * Durable, not an instance field: the isolate dying is the event being
+ * counted, so the count has to outlive it. Cleared whenever a turn
+ * completes normally.
+ */
+const MAX_WATCHDOG_ATTEMPTS = 3;
+const WATCHDOG_ATTEMPTS_KEY = 'watchdogAttempts';
 
 // Persisted-event size caps. Real staging metrics/search results are
 // far larger than the stub's canned events, and every event is stored
@@ -456,6 +476,9 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
         turn + turnBudgetOf(this.env),
       );
       this.setStatus('running', { started_at: Date.now() });
+      // A new message is a new attempt at a different thing — don't hold
+      // a previous step's watchdog strikes against it.
+      await this.state.storage.delete(WATCHDOG_ATTEMPTS_KEY);
       await this.notifyCoordinator('resumed');
       await this.state.storage.setAlarm(Date.now() + TURN_DELAY_MS);
       return Response.json({ ok: true });
@@ -474,6 +497,7 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
       this.turnAbort?.abort();
       // Drop the watchdog/next-turn alarm so nothing re-fires the loop.
       await this.state.storage.deleteAlarm();
+      await this.state.storage.delete(WATCHDOG_ATTEMPTS_KEY);
       this.append({ kind: 'notification', turnId: 'system', content: 'Investigation cancelled by the user.' });
       this.append({ kind: 'done', reason: 'aborted' });
       this.setStatus('cancelled', { concluded_at: Date.now() });
@@ -713,6 +737,51 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
     // alarm when it finishes, so bailing here loses nothing.
     if (this.turnInFlight) return;
     this.turnInFlight = true;
+
+    // Count this attempt BEFORE running, and durably: if the turn kills
+    // its isolate there is no code path left to record that it tried.
+    // A turn that completes (or errors in a way we can catch) clears the
+    // counter, so only isolate-killing turns accumulate.
+    const row = this.row();
+    const attempts =
+      row && row.status === 'running'
+        ? ((await this.state.storage.get<number>(WATCHDOG_ATTEMPTS_KEY)) ?? 0) + 1
+        : 0;
+
+    if (attempts > MAX_WATCHDOG_ATTEMPTS) {
+      // Every attempt so far ended with the isolate dying mid-turn.
+      // Retrying again just crash-loops the node, so stop and say so.
+      this.turnInFlight = false;
+      await this.state.storage.deleteAlarm();
+      await this.state.storage.delete(WATCHDOG_ATTEMPTS_KEY);
+      const message =
+        `This step was abandoned after ${MAX_WATCHDOG_ATTEMPTS} attempts: each one ended with ` +
+        `the runtime terminating the isolate mid-turn (usually a tool exceeding the handler ` +
+        `time budget). The step was not retried again to avoid a restart loop.`;
+      this.append({ kind: 'error', message });
+      const interactive = ((row?.mode as SessionMode) ?? 'autonomous') === 'interactive';
+      if (interactive) {
+        this.append({
+          kind: 'notification',
+          turnId: 'system',
+          content: 'Send a follow-up message to try a different approach.',
+        });
+        await this.parkIdle();
+      } else {
+        await this.failRun(message);
+      }
+      return;
+    }
+
+    if (attempts > 0) await this.state.storage.put(WATCHDOG_ATTEMPTS_KEY, attempts);
+    if (attempts > 1) {
+      this.append({
+        kind: 'notification',
+        turnId: 'system',
+        content: `Retrying this step (attempt ${attempts} of ${MAX_WATCHDOG_ATTEMPTS}) — the previous attempt was interrupted mid-turn.`,
+      });
+    }
+
     // Watchdog: the per-turn timeout in runRealTurn recovers a hung LLM
     // or tool while THIS isolate lives, but if celld evicts the isolate
     // mid-turn (e.g. the handler exceeds its budget), the run is left
@@ -723,6 +792,8 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
     await this.state.storage.setAlarm(Date.now() + TURN_WATCHDOG_MS);
     try {
       await this.runTurn();
+      // Survived the turn — whatever happens next is a fresh problem.
+      await this.state.storage.delete(WATCHDOG_ATTEMPTS_KEY);
     } finally {
       this.turnInFlight = false;
     }

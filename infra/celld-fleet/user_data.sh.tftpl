@@ -66,6 +66,15 @@ CELLD_BUCKET=s3://$BUCKET
 AWS_REGION=$REGION
 CELLD_ADDR=127.0.0.1:8787
 CELLD_WATCH=/var/lib/celld
+# Write-ack posture (v0.3.0+). Pinned explicitly rather than left to the
+# default so a future celld default change can't silently move it. On a
+# single node `fleet` is identical to sync-to-bucket (no peers ⇒ no
+# record, no shipper, bucket-proven acks) and upgrades itself when a peer
+# joins; see the celld_durability variable.
+CELLD_DURABILITY=${celld_durability}
+# Per-request JS handler budget. Blowing it kills the celld PROCESS, so
+# every session on the node dies — pinned so it's visible, not implicit.
+CELLD_HANDLER_BUDGET_S=${celld_handler_budget_s}
 EOF
 mkdir -p /var/lib/celld
 

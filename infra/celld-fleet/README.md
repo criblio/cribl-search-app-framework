@@ -120,10 +120,48 @@ celld deploy <cell-dir> --bucket s3://<bucket_name>
 (`celld deploy` bundles with an `esbuild` binary from PATH or
 `CELLD_ESBUILD`.)
 
+## Durability posture (celld v0.3.0+)
+
+v0.3.0 introduced a replicated write-behind log and flipped the default
+write-ack posture from `bucket` to `fleet`. The module pins it explicitly
+via `celld_durability` (default `fleet`) so a future celld default change
+can't move it silently.
+
+**A single node does not need special-casing.** Per celld's own note, with
+`fleet` a lone node "behaves exactly like sync-to-bucket — no peers means
+no record, no shipper, and bucket-proven acks", and it recruits peers
+automatically once they appear. So the one-node fleet this module
+provisions keeps the pre-v0.3.0 durability guarantee under the new
+default, and gains the write-behind path (10× lower write latency, >100×
+fewer Class A S3 operations) only when it actually becomes a fleet.
+
+Set `celld_durability = "bucket"` only to pin bucket-proven acks
+permanently for a multi-node fleet, accepting the latency and
+per-transaction PUT cost.
+
+`celld_handler_budget_s` (default 300) is pinned for visibility: blowing
+the per-request JS handler budget terminates the whole **celld process**,
+not just the offending isolate, so every session on the node dies with
+it. Keep long in-cell work (dependency fetching, bundling) well inside it.
+
 ## Operational notes (inherited from the APM node)
 
 - Graceful shutdown matters: replication drains on SIGTERM; the unit
-  sets `TimeoutStopSec=90`. Never SIGKILL a node you care about.
-- Never mix celld versions in one fleet — replace all nodes together.
+  sets `TimeoutStopSec=90` (comfortably above celld's 25s
+  `CELLD_SHUTDOWN_DRAIN_MS` default). Never SIGKILL a node you care about.
+- **v0.1.0 → v0.2.0 must not be rolled** — stop every node, then start
+  the new ones (block-format replication objects aren't backward-readable).
+  **v0.2.1 → v0.3.0 may be rolled** one node at a time; a mixed fleet is
+  safe, and the v0.3.0 node falls back to bucket-proven acks until its
+  peers catch up.
+- **Do not downgrade to v0.2.x** on a node that has run v0.3.0 unless its
+  shutdown log shows `node-log close: sealed epoch` — a v0.2.x binary
+  can't read the replicated log or bundle objects, so it can lose
+  acknowledged writes. A stop under load can leave the record open.
 - No SSH: `aws ssm start-session --target <instance_id>`.
 - The URL is `https://<eip-with-dashes>.sslip.io` (Caddy + ACME).
+- v0.2.1+ ignores `X-Forwarded-Host`/`X-Forwarded-Proto` by default, so
+  `request.url` carries the loopback host Caddy proxies to rather than the
+  public one. Harmless for cells that route on path + query (all of ours);
+  a cell that needs the public host must set
+  `CELLD_TRUST_FORWARDED_HEADERS=1`.

@@ -154,16 +154,18 @@ resource "aws_instance" "cell" {
   vpc_security_group_ids = [aws_security_group.cell.id]
 
   user_data = templatefile("${path.module}/user_data.sh.tftpl", {
-    cell_name            = var.cell_name
-    bucket               = aws_s3_bucket.fleet.bucket
-    region               = var.region
-    celld_version        = var.celld_version
-    caddy_version        = var.caddy_version
-    domain               = "${replace(aws_eip.cell.public_ip, ".", "-")}.sslip.io"
-    ssm_prefix           = local.ssm_prefix
-    secret_keys          = join(" ", var.secret_env_keys)
-    required_secret_keys = join(" ", var.required_secret_keys)
-    plain_env_lines      = join("\n", [for k, v in var.plain_env : "CELLD_VAR_${k}=${v}"])
+    cell_name              = var.cell_name
+    bucket                 = aws_s3_bucket.fleet.bucket
+    region                 = var.region
+    celld_version          = var.celld_version
+    celld_durability       = var.celld_durability
+    celld_handler_budget_s = var.celld_handler_budget_s
+    caddy_version          = var.caddy_version
+    domain                 = "${replace(aws_eip.cell.public_ip, ".", "-")}.sslip.io"
+    ssm_prefix             = local.ssm_prefix
+    secret_keys            = join(" ", var.secret_env_keys)
+    required_secret_keys   = join(" ", var.required_secret_keys)
+    plain_env_lines        = join("\n", [for k, v in var.plain_env : "CELLD_VAR_${k}=${v}"])
   })
   user_data_replace_on_change = true
 

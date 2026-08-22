@@ -21,9 +21,42 @@ variable "instance_type" {
 }
 
 variable "celld_version" {
-  description = "celld release tag to install. v0.2.0+ splits the public listener from an internal peer/operator listener; the public listener here is loopback-only behind Caddy, so no --internal-listen is required. A fleet must never mix v0.1.0 and v0.2.0 nodes (block-format replication objects are not backward-readable) — upgrade by replacing every node, not rolling."
+  description = "celld release tag to install. v0.2.0+ splits the public listener from an internal peer/operator listener; the public listener here is loopback-only behind Caddy, so no --internal-listen is required. A fleet must never mix v0.1.0 and v0.2.0 nodes (block-format replication objects are not backward-readable) — upgrade by replacing every node, not rolling. v0.2.1→v0.3.0 CAN roll one node at a time, but do not start a v0.2.x binary on a node that has run v0.3.0 unless its shutdown log shows `node-log close: sealed epoch` — a v0.2.x binary cannot read the replicated log and the downgrade can lose acknowledged writes. See celld_durability for the v0.3.0 durability default."
   type        = string
-  default     = "v0.2.0"
+  default     = "v0.3.0"
+}
+
+variable "celld_durability" {
+  description = <<-EOT
+    Write-acknowledgement posture. v0.3.0 changed the default from `bucket`
+    to `fleet`: `fleet` acks a write once a follower has fsynced it and
+    tiers to the object store behind (10x lower write latency, >100x fewer
+    Class A S3 ops); `bucket` waits for the store on every write.
+
+    `fleet` is SAFE for a single node and is the right default here. Per
+    celld's own note, a lone node "behaves exactly like sync-to-bucket — no
+    peers means no record, no shipper, and bucket-proven acks", and it
+    upgrades itself the moment a peer appears. So a single-node fleet keeps
+    v0.2.1's durability guarantee under the new default; there is nothing to
+    special-case.
+
+    Set `bucket` only to pin bucket-proven acks permanently — e.g. a
+    multi-node fleet that must not acknowledge a write before it is in S3,
+    accepting the latency and per-transaction PUT cost for it.
+  EOT
+  type        = string
+  default     = "fleet"
+
+  validation {
+    condition     = contains(["fleet", "bucket"], var.celld_durability)
+    error_message = "celld_durability must be \"fleet\" or \"bucket\"."
+  }
+}
+
+variable "celld_handler_budget_s" {
+  description = "Per-request JavaScript handler budget in seconds (celld default 300). Exceeding it terminates the whole celld PROCESS, not just the isolate, so every session on the node dies with it — keep in-cell work (dependency fetching, bundling) well inside this. Raise it only if a cell has a legitimately long handler and you accept a slower failure detection."
+  type        = number
+  default     = 300
 }
 
 variable "caddy_version" {
