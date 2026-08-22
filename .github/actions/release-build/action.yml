@@ -29,8 +29,26 @@ runs:
         git clone --filter=blob:none https://github.com/criblio/cribl-search-app-framework.git ../cribl-search-app-framework
         git -C ../cribl-search-app-framework checkout --detach "$SHA"
         test "$(git -C ../cribl-search-app-framework rev-parse HEAD)" = "$SHA"
-        npm --prefix ../cribl-search-app-framework/packages/app-utils ci
-        npm --prefix ../cribl-search-app-framework/packages/app-tooling ci
+        # Install wherever the pinned commit keeps its lockfiles. The
+        # packages used to carry one each; they are npm workspaces now,
+        # with a single root lockfile — and `npm ci` in a package
+        # directory that has no lockfile is a hard EUSAGE error, so
+        # hardcoding either layout breaks the other half of the SHA
+        # range this legacy mode exists to serve.
+        FW=../cribl-search-app-framework
+        if [ -f "$FW/package-lock.json" ]; then
+          npm --prefix "$FW" ci
+          # `dist/` is gitignored, and a file: dep resolves to a symlink
+          # rather than a pack, so npm never runs the package's prepack —
+          # the consumer's tsc would see no declarations at all (TS2307
+          # on every framework import). The root script knows the
+          # inter-package build order, which `--workspaces` does not.
+          npm --prefix "$FW" run build
+        else
+          for pkg in app-utils app-tooling; do
+            npm --prefix "$FW/packages/$pkg" ci
+          done
+        fi
     - name: Install locked dependencies
       shell: bash
       env:
