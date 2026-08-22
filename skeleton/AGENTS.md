@@ -8,6 +8,53 @@ The following are set on `window` automatically when your app runs inside Cribl.
 |---|---|---|
 | `CRIBL_API_URL` | `https://localhost:9000/api/v1` | Base URL for all Cribl API calls |
 | `CRIBL_BASE_PATH` | `/app-ui/my-app` | The base path your app is mounted at |
+| `getCriblUser` | `() => Promise<CriblUser>` | The signed-in user — see below |
+
+### Signed-in user identity
+
+`window.getCriblUser()` returns a **memoized** Promise resolving to the
+member viewing your app. Available in installed Apps and in Live Preview.
+
+```js
+const user = await window.getCriblUser();
+// { id, username, email?, firstName?, lastName?, initials? }
+```
+
+| Field | Always present | Notes |
+|---|---|---|
+| `id` | yes | Stable member id — the field to key storage on |
+| `username` | yes | Login name |
+| `email` / `firstName` / `lastName` / `initials` | no | May be absent depending on the member record |
+
+Call it once at startup and keep the result — it's memoized, so repeat
+calls are cheap, but threading one value through your app is simpler than
+awaiting a Promise in every component.
+
+The intended use is **distinguishing members**: per-member preferences,
+"last viewed" state, an avatar in the header. Namespace the KV key on
+`user.id`:
+
+```js
+fetch(`${window.CRIBL_API_URL}/kvstore/prefs/${user.id}`, { method: 'PUT', body });
+```
+
+**It is identity, not authorization.** Two limits, and neither has a
+workaround in the app:
+
+- **No roles or permissions.** The platform states this plainly: the call
+  provides identity only. If a feature should be admin-only, the API call
+  behind it must be what enforces that — the proxy injects the caller's
+  auth, so a request the member isn't entitled to make fails on the server.
+  Hiding the button is presentation, not a control.
+- **It does not reach your backend.** This is a browser-side call with no
+  signed token attached, and `proxies.yml` header-injection expressions
+  support only string literals, `kv.<key>`, and concatenation — there is no
+  user context to inject. So a backend of your own can only be *told* who
+  is asking, by a client that could say anything. Use it for separation
+  (each member gets their own drawer), never for isolation (keeping one
+  member out of another's). Keying a *credential* or any secret on a
+  client-asserted id looks like it enforces per-user access while
+  enforcing nothing.
 
 ## How API Calls Work (Fetch Proxy)
 
