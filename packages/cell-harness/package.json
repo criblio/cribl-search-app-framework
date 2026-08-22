@@ -1,6 +1,6 @@
 {
   "name": "@criblio/cell-harness",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Generic server-side agent harness for cells (Worker + Durable Objects on celld): payload seam, coordinator + session DO factories, router/auth/tickets, pi-agent-core turn runner.",
   "main": "./dist/index.js",
@@ -8,7 +8,7 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
-    "@criblio/agent-protocol": "^0.1.1",
+    "@criblio/agent-protocol": "^0.2.0",
     "@criblio/cell-workspace": "^0.1.1",
     "@earendil-works/pi-agent-core": "^0.84.2",
     "@earendil-works/pi-ai": "^0.84.2"

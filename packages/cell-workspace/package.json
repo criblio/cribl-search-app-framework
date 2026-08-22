@@ -8,7 +8,7 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
-    "@criblio/agent-protocol": "^0.1.1"
+    "@criblio/agent-protocol": "^0.2.0"
   },
   "peerDependencies": {
     "@criblio/app-utils": "*"

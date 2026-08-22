@@ -45,6 +45,7 @@ import {
   type WireLoopEvent,
 } from '@criblio/agent-protocol';
 import { runRealTurn, type LlmConfig } from './realTurn';
+import type { StreamFn } from '@earendil-works/pi-agent-core';
 import type { Message, UserMessage } from '@earendil-works/pi-ai';
 
 const TURN_DELAY_MS = 1_000;
@@ -98,6 +99,43 @@ const MAX_UI_ROWS = 200;
 /** Hard ceiling on a single stored event; beyond it, drop the ui and
  *  keep the (already-bounded) textual content. */
 const MAX_EVENT_BYTES = 96 * 1024;
+
+/** Base64 chars per image chunk row. Mirrors the workspace blob store's
+ *  bounded-row discipline: celld caps how much a single SQL result may
+ *  return, so a 2 MB screenshot has to arrive in pages. */
+const IMAGE_CHUNK_CHARS = 48 * 1024;
+/** Rows read per page when rehydrating an image. */
+const IMAGE_PAGE_ROWS = 16;
+/** Largest single attached image (base64 chars ≈ 4/3 × raw bytes). The
+ *  client downscales before upload; this is the backstop. */
+const MAX_IMAGE_B64 = 4 * 1024 * 1024;
+/** Most images accepted on one message. */
+const MAX_IMAGES_PER_MESSAGE = 4;
+/**
+ * How many of the most recent user messages keep their images when the
+ * history is rebuilt.
+ *
+ * Images are far more expensive per turn than text and a coding session
+ * runs long: every turn re-sends the whole history, so an unbounded
+ * policy would pay for every screenshot ever pasted on every
+ * subsequent turn. Older messages keep their text and a
+ * "[screenshot omitted]" marker, so the model still knows an image was
+ * there and can ask for it again.
+ */
+const IMAGE_HISTORY_WINDOW = 3;
+
+/**
+ * A persisted pi message, plus the out-of-band image references a user
+ * message may carry. `imageKeys` is our own field, not pi's: it never
+ * reaches the model (history() replaces it with real image content or a
+ * text marker), it just records which rows of agent_images belong to
+ * this message.
+ */
+type StoredMessage = Message & { imageKeys?: string[]; timestamp?: number };
+
+function imageKeysOf(msg: StoredMessage): string[] {
+  return msg.role === 'user' && Array.isArray(msg.imageKeys) ? msg.imageKeys : [];
+}
 
 interface CappableUi {
   kind?: string;
@@ -180,6 +218,10 @@ interface StartBody<TTrigger> {
  */
 export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
   payload: CellPayload<TTrigger, TEnv>,
+  /** Test seam: replaces the OpenAI-completions stream, so a test can
+   *  drive real turns (and inspect the history they're handed) without a
+   *  network or an LLM. Production callers omit it. */
+  opts?: { streamFn?: StreamFn },
 ): CellDOClass<TEnv> {
   return class SessionDO {
   private readonly state: DurableObjectState;
@@ -249,6 +291,26 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
       `CREATE TABLE IF NOT EXISTS agent_messages (
          seq INTEGER PRIMARY KEY AUTOINCREMENT,
          message_json TEXT NOT NULL
+       )`,
+    );
+    // Images attached to user messages, chunked and keyed.
+    //
+    // Deliberately NOT inlined into agent_messages: history() reads that
+    // whole table on every turn, so a base64 screenshot living there
+    // would be re-read (and re-sent to the model) for the rest of the
+    // session — the same trap the 75 KB seed prompt avoids by living in
+    // a KV entry. Here the message keeps only the image's key, and the
+    // bytes are fetched by key, a page at a time, for the few messages
+    // that still carry them.
+    this.state.storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS agent_images (
+         img_key TEXT NOT NULL, seq INTEGER NOT NULL, chunk TEXT NOT NULL,
+         PRIMARY KEY (img_key, seq)
+       )`,
+    );
+    this.state.storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS agent_image_meta (
+         img_key TEXT PRIMARY KEY, mime TEXT NOT NULL, bytes INTEGER NOT NULL
        )`,
     );
     // Interactive-mode columns. Idempotent (SQLite lacks ADD COLUMN IF
@@ -450,21 +512,83 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
       if (row.status === 'running' || row.status === 'queued') {
         return Response.json({ error: 'investigation is still running' }, { status: 409 });
       }
-      const { content } = (await request.json()) as { content?: string };
-      if (!content || !content.trim()) {
+      const { content, images } = (await request.json()) as {
+        content?: string;
+        images?: Array<{ data?: string; mimeType?: string }>;
+      };
+      const attached = Array.isArray(images) ? images.slice(0, MAX_IMAGES_PER_MESSAGE) : [];
+      // An image alone is a legitimate message ("look at this"), so
+      // require text only when nothing is attached.
+      if ((!content || !content.trim()) && attached.length === 0) {
         return Response.json({ error: 'content required' }, { status: 400 });
       }
+      const turnSeq = Number(row.turn ?? 0);
+      // Keys must stay unique for the life of the session, and the turn
+      // index alone isn't enough: a turn that errors parks at idle
+      // WITHOUT advancing it, so the next message's images would reuse
+      // the same keys and overwrite the earlier message's screenshots.
+      // The stored-image count is monotonic (nothing deletes rows), so
+      // it supplies the unique part; the turn stays in the key because
+      // it makes a key legible when debugging a live session.
+      const storedImages = Number(
+        this.state.storage.sql.exec(`SELECT COUNT(*) AS n FROM agent_image_meta`).one().n ?? 0,
+      );
+      const imageKeys: string[] = [];
+      const rejected: string[] = [];
+      for (const [i, img] of attached.entries()) {
+        const data = typeof img?.data === 'string' ? img.data : '';
+        const mime = typeof img?.mimeType === 'string' ? img.mimeType : '';
+        // Only the raster formats every vision model accepts. An
+        // unrecognized mime would be forwarded verbatim into a data URI
+        // and rejected by the provider mid-turn, which is a much worse
+        // place to find out.
+        if (!/^image\/(png|jpeg|webp|gif)$/.test(mime) || data.length === 0) {
+          rejected.push(`#${i + 1}: unsupported image type`);
+          continue;
+        }
+        const key = `img-${turnSeq}-${storedImages + imageKeys.length}`;
+        if (!this.putImage(key, data, mime)) {
+          rejected.push(`#${i + 1}: too large (max ${Math.floor(MAX_IMAGE_B64 / 1024)} KB encoded)`);
+          continue;
+        }
+        imageKeys.push(key);
+      }
       // Append the user's turn to the pi history and resume the loop.
-      const userMsg: UserMessage = { role: 'user', content, timestamp: Date.now() };
+      // The images live in agent_images; only their keys ride along (see
+      // history(), which rehydrates the recent ones).
+      const text = (content ?? '').trim();
+      const userMsg: StoredMessage = {
+        role: 'user',
+        content: text || '(see attached screenshot)',
+        timestamp: Date.now(),
+        ...(imageKeys.length > 0 ? { imageKeys } : {}),
+      };
       this.state.storage.sql.exec(
         `INSERT INTO agent_messages (message_json) VALUES (?)`,
         JSON.stringify(userMsg),
       );
-      const turn = Number(row.turn ?? 0);
+      // Tell the user, in the transcript, when an attachment was
+      // dropped — silently discarding it would look like the model
+      // ignoring the picture.
+      if (rejected.length > 0) {
+        this.append({
+          kind: 'notification',
+          turnId: 'system',
+          content: `Some attachments were not sent — ${rejected.join('; ')}.`,
+        });
+      }
+      const turn = turnSeq;
       // Also record it as a transcript event (ordered before the assistant's
       // reply) so a reopened session replays the user's message, not just the
-      // agent's response.
-      this.append({ kind: 'userMessage', turnId: `user-${turn}`, content });
+      // agent's response. `imageCount` (not the bytes) so a replayed
+      // transcript can show that a screenshot was attached without the
+      // event table carrying megabytes.
+      this.append({
+        kind: 'userMessage',
+        turnId: `user-${turn}`,
+        content: text,
+        ...(imageKeys.length > 0 ? { imageCount: imageKeys.length } : {}),
+      });
       // Fresh per-message turn budget so a long chat isn't killed by the
       // whole-conversation turn count. Reopening a concluded/failed run
       // also flips it to interactive (so the next answer PARKS at idle
@@ -599,6 +723,7 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
       baseUrl: this.env.LLM_BASE_URL,
       apiKey: this.env.LLM_API_KEY ?? '',
       model: this.env.LLM_MODEL ?? 'gpt-4.1',
+      vision: this.env.LLM_VISION === 'true',
     };
   }
 
@@ -684,17 +809,104 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
     await this.state.storage.put('seedPromptDone', true);
   }
 
-  /** The full pi conversation: the seed prompt (history[0], stored as
-   *  a DO KV entry, not in SQLite) followed by the accumulated
-   *  assistant + tool-result messages. */
+  /** Store one base64 image under a key, chunked. Returns false (and
+   *  stores nothing) if it exceeds the ceiling. */
+  private putImage(key: string, b64: string, mime: string): boolean {
+    if (b64.length > MAX_IMAGE_B64) return false;
+    this.state.storage.sql.exec(`DELETE FROM agent_images WHERE img_key = ?`, key);
+    for (let seq = 0; seq * IMAGE_CHUNK_CHARS < b64.length || seq === 0; seq++) {
+      const chunk = b64.slice(seq * IMAGE_CHUNK_CHARS, (seq + 1) * IMAGE_CHUNK_CHARS);
+      this.state.storage.sql.exec(
+        `INSERT INTO agent_images (img_key, seq, chunk) VALUES (?, ?, ?)`,
+        key,
+        seq,
+        chunk,
+      );
+      if (chunk.length < IMAGE_CHUNK_CHARS) break;
+    }
+    this.state.storage.sql.exec(
+      `INSERT OR REPLACE INTO agent_image_meta (img_key, mime, bytes) VALUES (?, ?, ?)`,
+      key,
+      mime,
+      b64.length,
+    );
+    return true;
+  }
+
+  /** Reassemble a stored image, reading a bounded page at a time so a
+   *  multi-megabyte screenshot can't blow celld's SQL result cap. */
+  private getImage(key: string): { data: string; mimeType: string } | null {
+    const meta = this.state.storage.sql
+      .exec(`SELECT mime FROM agent_image_meta WHERE img_key = ?`, key)
+      .toArray()[0];
+    if (!meta) return null;
+    const parts: string[] = [];
+    for (let after = -1; ; ) {
+      const page = this.state.storage.sql
+        .exec(
+          `SELECT seq, chunk FROM agent_images
+             WHERE img_key = ? AND seq > ? ORDER BY seq LIMIT ?`,
+          key,
+          after,
+          IMAGE_PAGE_ROWS,
+        )
+        .toArray();
+      if (page.length === 0) break;
+      for (const r of page) parts.push(String(r.chunk));
+      after = Number(page[page.length - 1].seq);
+    }
+    return { data: parts.join(''), mimeType: String(meta.mime) };
+  }
+
+  /**
+   * The full pi conversation: the seed prompt (history[0], stored as a
+   * DO KV entry, not in SQLite) followed by the accumulated assistant +
+   * tool-result messages.
+   *
+   * User messages persist their images as `imageKeys` rather than inline
+   * base64 (see the agent_images table). Rehydration happens here, and
+   * only for the last IMAGE_HISTORY_WINDOW image-bearing messages —
+   * every turn re-sends the whole history, so keeping every screenshot
+   * forever would multiply the cost of a long session. Older ones
+   * degrade to a text marker.
+   */
   private async history(): Promise<Message[]> {
     const prompt = (await this.state.storage.get<string>('seedPrompt')) ?? '';
     const seedMsg: UserMessage = { role: 'user', content: prompt, timestamp: 0 };
     const stored = this.state.storage.sql
       .exec(`SELECT message_json FROM agent_messages ORDER BY seq`)
       .toArray()
-      .map((r) => JSON.parse(String(r.message_json)) as Message);
-    return [seedMsg, ...stored];
+      .map((r) => JSON.parse(String(r.message_json)) as StoredMessage);
+
+    // Which image-bearing messages stay pictorial: the newest few.
+    const withImages = stored
+      .map((m, i) => (imageKeysOf(m).length > 0 ? i : -1))
+      .filter((i) => i >= 0);
+    const keep = new Set(withImages.slice(-IMAGE_HISTORY_WINDOW));
+
+    const hydrated = stored.map((msg, i) => {
+      const keys = imageKeysOf(msg);
+      if (keys.length === 0) return msg as Message;
+      const text = typeof msg.content === 'string' ? msg.content : '';
+      if (!keep.has(i)) {
+        const n = keys.length;
+        return {
+          role: 'user',
+          content: `${text}\n\n[${n} screenshot${n === 1 ? '' : 's'} omitted to bound context — ask me to resend if needed]`,
+          timestamp: msg.timestamp ?? 0,
+        } as UserMessage;
+      }
+      const images = keys
+        .map((k) => this.getImage(k))
+        .filter((im): im is { data: string; mimeType: string } => im !== null)
+        .map((im) => ({ type: 'image' as const, data: im.data, mimeType: im.mimeType }));
+      return {
+        role: 'user',
+        content: [...(text ? [{ type: 'text' as const, text }] : []), ...images],
+        timestamp: msg.timestamp ?? 0,
+      } as UserMessage;
+    });
+    return [seedMsg, ...hydrated];
   }
 
   private async commitLifecycle(
@@ -882,6 +1094,7 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
           concludingTool: payload.concludingToolName,
           emit: (ev) => this.append(ev),
           signal: this.turnAbort.signal,
+          streamFn: opts?.streamFn,
         });
         // A concurrent POST /cancel aborted this turn and already set the
         // terminal state; don't reschedule or override it.

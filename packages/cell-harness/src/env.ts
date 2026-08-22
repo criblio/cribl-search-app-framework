@@ -33,6 +33,11 @@ export interface CellEnv {
   LLM_API_KEY?: string;
   /** Model id sent to the endpoint. */
   LLM_MODEL?: string;
+  /** "true" ⇒ the model accepts image input, so attached images are
+   *  forwarded. Off by default: an arbitrary OpenAI-compatible
+   *  endpoint is not assumed multi-modal, and most providers hard-fail
+   *  a request that carries image parts to a text-only model. */
+  LLM_VISION?: string;
 
   // ── Source-code workspace (optional) ──
   /** JSON array of source repos the agent may check out, e.g.

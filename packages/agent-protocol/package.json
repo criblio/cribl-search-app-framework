@@ -1,6 +1,6 @@
 {
   "name": "@criblio/agent-protocol",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "description": "Wire protocol between a cell (server-side agent harness on celld) and its app UI: loop events, server frames, session statuses. Isomorphic \u2014 no runtime dependencies, safe in workers and browsers.",
   "main": "./dist/index.js",

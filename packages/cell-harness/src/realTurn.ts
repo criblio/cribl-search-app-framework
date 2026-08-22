@@ -34,6 +34,16 @@ export interface LlmConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /**
+   * Whether the configured model accepts image input. pi-ai gates
+   * image passthrough on the model's declared `input` modalities, so a
+   * false value here silently drops attached images rather than
+   * failing — declare it truthfully. Defaults to text-only: an
+   * arbitrary OpenAI-compatible endpoint is not assumed multi-modal,
+   * and sending image parts to a text-only model is a hard API error
+   * on most providers.
+   */
+  vision?: boolean;
 }
 
 /** Hard cap on a single coalesced assistant-text event (chars). */
@@ -90,7 +100,10 @@ function piModel(cfg: LlmConfig): Model<'openai-completions'> {
     provider: 'openai-compatible',
     baseUrl: cfg.baseUrl,
     reasoning: false,
-    input: ['text'],
+    // pi-ai checks `input.includes('image')` before forwarding image
+    // content; without 'image' here the parts are dropped on the way
+    // out and the model never sees the screenshot.
+    input: cfg.vision ? ['text', 'image'] : ['text'],
     // Cost accounting is not meaningful against arbitrary
     // OpenAI-compatible endpoints; zeros keep pi's usage math inert.
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
