@@ -38,10 +38,29 @@ variable "ssm_parameter_prefix" {
   default     = ""
 }
 
+variable "security_group_description" {
+  description = "Description of the node security group. Overridable ONLY because a security group's description is create-time: changing it forces replacement, and since the group's name is derived from cell_name, the replacement is a same-name destroy/create that fights the attached instance. A pre-module stack adopting this module sets its existing description here to keep the plan clean. New stacks should leave the default."
+  type        = string
+  default     = "celld cell node: HTTPS in (webhooks + platform proxy), no SSH (use SSM Session Manager)."
+}
+
 variable "secret_env_keys" {
-  description = "SSM SecureString names (under the prefix) pulled onto the node at boot as CELLD_VAR_<key>. Boot fails loudly on a missing parameter, so list exactly what the cell needs."
+  description = "SSM SecureString names (under the prefix) pulled onto the node at boot as CELLD_VAR_<key>. A key missing from SSM is skipped with a warning (and recorded in /etc/celld/missing-secrets) unless it is also in required_secret_keys — cells degrade per feature, so one absent optional credential must not cost you the node."
   type        = list(string)
   default     = ["UI_BEARER", "TICKET_SECRET"]
+}
+
+variable "required_secret_keys" {
+  description = "Subset of secret_env_keys whose absence aborts boot. Use it for credentials with no working degraded mode — UI_BEARER gates every authenticated route (bearerOk() treats \"unset\" as closed), so a node without it is up and unusable, which is worse than not being up. Leave a credential OUT of this list when the payload already reports the feature as unconfigured."
+  type        = list(string)
+  default     = ["UI_BEARER"]
+
+  validation {
+    # A key required but never fetched can never be checked — almost
+    # always a typo, and it would read as "required" while doing nothing.
+    condition     = length(setsubtract(var.required_secret_keys, var.secret_env_keys)) == 0
+    error_message = "required_secret_keys must be a subset of secret_env_keys; these are not fetched at all: ${join(", ", setsubtract(var.required_secret_keys, var.secret_env_keys))}."
+  }
 }
 
 variable "plain_env" {

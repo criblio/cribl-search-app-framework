@@ -10,6 +10,7 @@ REGION="${region}"
 DOMAIN="${domain}"
 SSM_PREFIX="${ssm_prefix}"
 SECRET_KEYS="${secret_keys}"
+REQUIRED_KEYS="${required_secret_keys}"
 
 # ── celld binary (pinned release) ────────────────────────────────
 curl -fsSL -o /tmp/celld.gz \
@@ -19,15 +20,41 @@ install -m 0755 /tmp/celld /usr/local/bin/celld
 /usr/local/bin/celld --version
 
 # ── secrets: SSM SecureStrings → env file (root-only) ────────────
-# Parameters are created out-of-band (see the module README), never
-# in Terraform state. Missing parameters fail loudly here.
+# Parameters are created out-of-band (see the module README), never in
+# Terraform state.
+#
+# A key listed in required_secret_keys must resolve or boot aborts — it
+# gates something with no working degraded mode (UI_BEARER, say: without
+# it every route is closed, so the node comes up unusable, which is worse
+# than not coming up). Every other key is best-effort. Cells are written
+# to degrade per feature — a tool whose credential is absent returns
+# "not configured" guidance the agent can route around — and aborting
+# boot over one optional credential throws that away to brick the node:
+# nothing past this loop runs, so there's no celld and no Caddy either.
+# Skipped keys are logged and listed in /etc/celld/missing-secrets.
 umask 077
 mkdir -p /etc/celld
 : > /etc/celld/env
+: > /etc/celld/missing-secrets
 for key in $SECRET_KEYS; do
+  # `|| true` so a get-parameter failure doesn't trip `set -e` before we
+  # can decide whether this key was required.
   value=$(aws ssm get-parameter --region "$REGION" \
     --name "$SSM_PREFIX/$key" --with-decryption \
-    --query Parameter.Value --output text)
+    --query Parameter.Value --output text 2>/tmp/ssm-err) || true
+  if [ -z "$value" ]; then
+    # grep -x against one-per-line: substring matching would let
+    # TOKEN satisfy a requirement for GITHUB_TOKEN.
+    if printf '%s\n' $REQUIRED_KEYS | grep -qxF "$key"; then
+      echo "FATAL: required secret $SSM_PREFIX/$key is missing or empty." >&2
+      cat /tmp/ssm-err >&2
+      exit 1
+    fi
+    echo "WARNING: optional secret $SSM_PREFIX/$key is missing — whatever it gates will report itself unconfigured." >&2
+    cat /tmp/ssm-err >&2
+    echo "$key" >> /etc/celld/missing-secrets
+    continue
+  fi
   echo "CELLD_VAR_$key=$value" >> /etc/celld/env
 done
 # Non-secret cell config (from the module's plain_env map).
