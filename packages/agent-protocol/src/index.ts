@@ -43,7 +43,10 @@ export type WireLoopEvent =
   // session replays the user's side of the conversation, not just the
   // assistant's. Not a framework LoopEvent — the UI renders it as a
   // user bubble directly.
-  | { kind: 'userMessage'; turnId: string; content: string }
+  /** `imageCount` records that the user attached screenshots, without
+   *  putting their bytes in the event table — a replayed transcript can
+   *  then show "2 images" instead of losing them silently. */
+  | { kind: 'userMessage'; turnId: string; content: string; imageCount?: number }
   | { kind: 'assistantText'; turnId: string; chunk: string }
   | { kind: 'assistantDone'; turnId: string }
   | {
