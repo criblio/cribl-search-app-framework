@@ -22,7 +22,27 @@ Your app runs inside a sandboxed iframe. The platform **automatically intercepts
 - Use `fetch()` as normal — it just works
 - You do NOT need to handle authentication
 - You cannot override or replace `window.fetch` (it is locked)
-- Requests that don't target `CRIBL_API_URL` are passed through directly (no proxy)
+- **Every external request is proxied and checked against `config/proxies.yml`.**
+  There is no "direct" path out of the iframe — see below.
+
+### There is no un-proxied egress
+
+A host not declared in `config/proxies.yml` returns
+`403 {"error":"Domain example.com:443 is not declared in proxies.yml"}`.
+Enforced twice — a `fetch`/XHR wrapper in your realm, and the iframe CSP —
+so there is no way around it:
+
+- A `Worker` or child iframe gets an unpatched native `fetch`, but inherits
+  the CSP and still fails (`TypeError`, not a 403). `<img>`/`<script>` are
+  blocked too. Don't spend time here.
+- `localhost`/`127.0.0.1` are unreachable; declaring them dials Cribl's own
+  loopback, not the user's machine. Private IPs are blocked (SSRF).
+- `proxies.yml` is checked at **runtime**, not just packaging: a new host
+  needs a file edit and a repackage, never a setting.
+- The frame's origin is opaque (`self.origin === "null"`, not
+  `location.origin`), so origin-gated APIs are unavailable —
+  `navigator.serviceWorker` throws on *property access*, so feature-detect
+  inside `try`/`catch`.
 
 ### URL Rewriting Rules
 
@@ -32,7 +52,7 @@ The proxy applies these rewrites automatically:
 |---|---|---|
 | `fetch(CRIBL_API_URL + '/kvstore/my-key')` | Rewritten to `/api/v1/p/{yourPackId}/kvstore/my-key` | Scopes KV store access to your pack |
 | `fetch(CRIBL_API_URL + '/proxy/some/path')` | Rewritten to `/api/v1/p/{yourPackId}/proxy/some/path` | Scopes proxy calls to your pack |
-| `fetch('https://api.example.com/data')` | Rewritten to `/api/v1/p/{yourPackId}/proxy/api.example.com/data` | External calls are routed through the platform proxy |
+| `fetch('https://api.example.com/data')` | Rewritten to `/api/v1/p/{yourPackId}/proxy/api.example.com/data` — **403 unless `api.example.com` is declared in `config/proxies.yml`** | External calls are routed through the platform proxy |
 | `fetch(CRIBL_API_URL + '/search/jobs')` | Passed through as-is | Standard API calls are not rewritten |
 
 **Important:** Your app cannot access other packs' resources. Any request targeting a different pack ID will be rejected.
