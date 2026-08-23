@@ -65,6 +65,46 @@ browser TS graph. Common patterns:
 - `loadSettings() / saveSettings()` — KV-store-backed app settings
 - `loadDotEnv(path)` — `.env` parser for Node scripts
 
+**Agent tools** (`@cribl/app-utils/agent-tools`, `/agent-tool-defs`,
+`/cribl-api-tool`, `/openapi-digest`, `/cell-cribl`)
+
+Definitions and executors for the tools an LLM agent calls. Subpath-only
+— importing these from the root would pull the agent graph into every
+browser bundle.
+
+- `runSearchDefinition() / runMetricsQueryDefinition()` — the schemas
+  for `createRunSearchTool` / `createRunMetricsQueryTool`. Keep each
+  definition beside its executor: a field renamed on one side only is
+  an argument that silently never arrives.
+- `criblApiDefinition() / createCriblApiTool(deps)` — `cribl_api`, a
+  three-action tool (`search` the OpenAPI digest → `describe` one
+  operation → `call` it) so an agent can validate a real API
+  interaction before app code is written against it.
+- `@cribl/app-utils/openapi-digest.json` — 902 operations distilled
+  from Cribl's 8 MB published spec by
+  `npm run build:openapi-digest`. Pass it in as `deps.digest`;
+  the TS module never imports it, so a host can ship its own.
+- `@cribl/app-utils/cell-cribl` — fills every injection seam for a
+  server-side host (a workerd cell has no iframe fetch proxy):
+  `createCellSearchHttpClient`, `createCellRunQuery`,
+  `createCellMetricsTransport`, `createCellApiClient`, all from one
+  injected `bearer()`.
+
+**Writes through `cribl_api` require per-call human approval.** A write
+(anything not GET/HEAD/OPTIONS) is *not* executed on first call: the
+tool records a `PendingWrite` and returns an approval id. The user
+approves through a host route the agent cannot reach; the agent retries
+with `approvalId`; the tool calls `approvals.consume(id, digest)` —
+atomic check-and-burn — before the request. The approval is bound to a
+canonical digest of the exact request (so a changed body voids it) and
+is single-use (so it can't be replayed). A host with no `approvals`
+store refuses writes outright rather than running them.
+
+This gates the *agent*, not the human — anyone who can drive the
+session can approve, and the bearer's own permissions bound the damage.
+Its guarantee is narrow and worth keeping: no write happens without a
+person deciding.
+
 **Saved-search provisioner** (`@cribl/app-utils/provisioner`)
 
 - `reconcile(http, config)` / `planOnly(http, config)` — diff the

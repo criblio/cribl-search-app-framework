@@ -7,6 +7,7 @@ export {
   type SearchJobOptions,
 } from './search-job.js';
 export {
+  ANY_DATASET,
   KqlSafetyError,
   assertKqlPredicate,
   assertReadOnlyKql,
