@@ -20,6 +20,12 @@ Calls to undeclared domains return a JSON error, not a network error.
 ### Globals
 - `window.CRIBL_API_URL` — full URL to `/api/v1` (injected by host)
 - `window.CRIBL_BASE_PATH` — React Router basename (e.g., `/app-ui/mypack/`)
+- `window.getCriblUser()` — memoized Promise of the signed-in member
+  (`{ id, username, email?, firstName?, lastName?, initials? }`). Call
+  once at startup. Identity only: **no roles or permissions**, and it
+  never leaves the browser (no signed token, and `proxies.yml` injection
+  can't assert a user), so it's for separating members' data — per-member
+  KV keys, an avatar — not for gating access. Let the API enforce that.
 
 ### React Router
 Always use `basename={window.CRIBL_BASE_PATH}` on `<BrowserRouter>`.
