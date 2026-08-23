@@ -120,7 +120,8 @@ export function runMetricsQueryDefinition(
   opts: RunMetricsQueryDefinitionOptions = {},
 ): AgentToolDefinition {
   const base =
-    'Run a PromQL query against the fast Cribl metrics store. MUCH faster than run_search for numeric time series — prefer it whenever a metric answers the question. Omit step for an instant snapshot; provide step (seconds) for a range/time-series. Only core PromQL is supported (no label_replace, no vector `or`).';
+    'Run a PromQL query against the fast Cribl metrics store. MUCH faster than run_search for numeric time series — prefer it whenever a metric answers the question. Omit step for an instant snapshot; provide step (seconds) for a range/time-series. Only core PromQL is supported (no label_replace, no vector `or`).' +
+    ' DISCOVERY: instead of PromQL, pass a dot-command to find out what exists before you query it — `.catalog [substring]` (metric names with their type, series count and whether anything queries them; start here), `.metadata [substring]` (name/type/help/unit), `.labels` (label names in the dataset), `.labels <metric>` (that metric\'s label dimensions, so you know what to group by), `.values <label>` (a label\'s values), `.series <metric>` (its label sets). Discovery returns a table, not a chart.';
   return {
     id: 'run_metrics_query',
     description:

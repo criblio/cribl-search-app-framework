@@ -15,6 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   cellCriblFetch,
   createCellApiClient,
+  createCellCatalogTransport,
+  createCellMetricsCatalog,
   createCellMetricsTransport,
   createCellSearchHttpClient,
   type CellCriblConfig,
@@ -190,5 +192,34 @@ describe('createCellMetricsTransport', () => {
     respond = () => ({ status: 404, body: 'not found' });
     const transport = createCellMetricsTransport(cfg());
     await expect(transport('up', {})).rejects.toThrow(/metrics query failed \(404\)/);
+  });
+});
+
+describe('createCellMetricsCatalog', () => {
+  it('authenticates the catalog reads and resolves the engine from the engines list', async () => {
+    respond = (url) =>
+      url.includes('/local_search/engines')
+        ? { body: '{"items":[{"id":"homelab","metricsDatasetId":"metrics","status":"ready"}]}' }
+        : { body: '{"status":"success","data":["job"]}' };
+    const catalog = createCellMetricsCatalog(cfg());
+    expect(await catalog.labels()).toEqual(['job']);
+    expect(calls).toHaveLength(2);
+    expect(new URL(calls[0].url).pathname).toBe('/api/v1/m/default_search/search/local_search/engines');
+    // /products/* takes NO group context — the reverse of /search/*.
+    expect(new URL(calls[1].url).pathname).toBe(
+      '/api/v1/products/lakehouse_engine_metrics/engines/homelab/datasets/metrics/prom/api/v1/labels',
+    );
+    expect(calls[1].headers.authorization).toBe('Bearer tok-1');
+  });
+
+  it('does not throw the 404 a non-Cloud workspace returns — the client decides', async () => {
+    // The transport must report the status rather than raise, so the
+    // catalog can turn a missing endpoint into a dot-command fallback.
+    respond = () => ({ status: 404, body: 'Cannot GET' });
+    const transport = createCellCatalogTransport(cfg());
+    await expect(transport('/products/lakehouse_engine_metrics/health')).resolves.toMatchObject({
+      status: 404,
+      ok: false,
+    });
   });
 });

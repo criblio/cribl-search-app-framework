@@ -36,6 +36,7 @@ const CELL_ENTRIES = [
   '../kql.js',
   '../search-job.js',
   '../metrics.js',
+  '../metrics-catalog.js',
   '../query-generation.js',
 ];
 

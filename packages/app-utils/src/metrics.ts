@@ -18,9 +18,17 @@
  *   .labels                → {"_kind":"label",   "_value":"<labelName>"}
  *   .metadata              → {"_kind":"metadata", "__name__", "_type", "_help", "_unit"}
  *   .series <metric>       → {"_kind":"series",  "__name__", <label>:<value>, ...}
+ *
+ * Those dot-commands return ZERO rows on some workspaces while PromQL
+ * over the identical transport works — a completed job with no events
+ * and no error, indistinguishable from "there are no metrics". Where a
+ * `catalog` is supplied (see `metrics-catalog.ts`) the three discovery
+ * functions use the engine's first-class catalog API instead and fall
+ * back to the dot-command only if the catalog is unreachable.
  */
 
 import { apiUrl } from './search.js';
+import type { MetricsCatalog } from './metrics-catalog.js';
 
 /** Default dataset for metrics queries. */
 export const METRICS_DATASET = 'metrics';
@@ -45,6 +53,13 @@ export interface MetricsQueryOptions {
    * + options, it returns the raw NDJSON response body.
    */
   transport?: MetricsTransport;
+  /**
+   * Catalog client for discovery (`listMetricMetadata`, `listLabels`,
+   * `listSeries`). When present those prefer it and fall back to the
+   * dot-commands; when absent they use the dot-commands alone. Ignored
+   * by the PromQL paths, which the catalog has no part in.
+   */
+  catalog?: MetricsCatalog;
 }
 
 /** Executes the metrics query GET and returns the raw NDJSON body. */
@@ -192,27 +207,66 @@ export async function queryInstant(
   return runMetricsQuery(query, rest);
 }
 
+/**
+ * Try the catalog, fall back to the dot-command.
+ *
+ * Both legs are attempted because each fails on workspaces where the
+ * other works: the catalog API is Cribl.Cloud-only (404 elsewhere),
+ * while the dot-commands return an empty result on workspaces that do
+ * have the catalog. An empty catalog answer is NOT a reason to fall
+ * back — the catalog reports absence accurately, and re-asking the
+ * transport would just pay a second round trip for the same nothing.
+ */
+async function viaCatalog<T>(
+  opts: MetricsQueryOptions,
+  fromCatalog: (catalog: MetricsCatalog) => Promise<T>,
+  fromDotCommand: () => Promise<T>,
+): Promise<T> {
+  if (!opts.catalog) return fromDotCommand();
+  try {
+    return await fromCatalog(opts.catalog);
+  } catch {
+    // The catalog's own error is deliberately swallowed: the fallback
+    // either answers the question or reports its own failure, and
+    // surfacing both would tell a caller about an endpoint that simply
+    // isn't available in their deployment.
+    return fromDotCommand();
+  }
+}
+
 /** List metric names + type/help/unit, optionally filtered by prefix. */
 export async function listMetricMetadata(
   prefix?: string,
   opts: MetricsQueryOptions = {},
 ): Promise<MetricMetadata[]> {
-  const rows = await fetchRows('.metadata', opts);
-  return rows
-    .filter((r) => r._kind === 'metadata')
-    .map((r) => ({
-      name: String(r.__name__ ?? ''),
-      type: String(r._type ?? ''),
-      help: String(r._help ?? ''),
-      unit: String(r._unit ?? ''),
-    }))
-    .filter((m) => !prefix || m.name.startsWith(prefix));
+  return viaCatalog(
+    opts,
+    (catalog) => catalog.metadata(prefix, opts.signal),
+    async () => {
+      const rows = await fetchRows('.metadata', opts);
+      return rows
+        .filter((r) => r._kind === 'metadata')
+        .map((r) => ({
+          name: String(r.__name__ ?? ''),
+          type: String(r._type ?? ''),
+          help: String(r._help ?? ''),
+          unit: String(r._unit ?? ''),
+        }))
+        .filter((m) => !prefix || m.name.startsWith(prefix));
+    },
+  );
 }
 
 /** List label names present in the dataset. */
 export async function listLabels(opts: MetricsQueryOptions = {}): Promise<string[]> {
-  const rows = await fetchRows('.labels', opts);
-  return rows.filter((r) => r._kind === 'label').map((r) => String(r._value));
+  return viaCatalog(
+    opts,
+    (catalog) => catalog.labels(opts.signal),
+    async () => {
+      const rows = await fetchRows('.labels', opts);
+      return rows.filter((r) => r._kind === 'label').map((r) => String(r._value));
+    },
+  );
 }
 
 /** One entry from GET /m/default_search/search/datasets (fields vary by provider). */
@@ -242,17 +296,23 @@ export async function listSeries(
   metric: string,
   opts: MetricsQueryOptions = {},
 ): Promise<Array<Record<string, string>>> {
-  const rows = await fetchRows(`.series ${metric}`, opts);
-  return rows
-    .filter((r) => r._kind === 'series')
-    .map((r) => {
-      const labels: Record<string, string> = {};
-      for (const [key, value] of Object.entries(r)) {
-        if (key === '_kind') continue;
-        labels[key] = String(value);
-      }
-      return labels;
-    });
+  return viaCatalog(
+    opts,
+    (catalog) => catalog.series(metric, opts.signal),
+    async () => {
+      const rows = await fetchRows(`.series ${metric}`, opts);
+      return rows
+        .filter((r) => r._kind === 'series')
+        .map((r) => {
+          const labels: Record<string, string> = {};
+          for (const [key, value] of Object.entries(r)) {
+            if (key === '_kind') continue;
+            labels[key] = String(value);
+          }
+          return labels;
+        });
+    },
+  );
 }
 
 // ── Dedup + short-TTL cache for the fast metrics store ────────────────

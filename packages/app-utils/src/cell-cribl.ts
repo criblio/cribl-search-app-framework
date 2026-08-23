@@ -12,6 +12,9 @@
  *   - {@link createCellMetricsTransport} → a `MetricsTransport` built
  *     from `metricsQueryPath`, so run_metrics_query hits the same
  *     endpoint the browser does,
+ *   - {@link createCellMetricsCatalog} → a `MetricsCatalog` for metrics
+ *     discovery, which needs its own transport because the catalog API
+ *     lives under `/products/…` rather than the query endpoint,
  *   - {@link createCellApiClient} → an `HttpClient` for the general
  *     Cribl REST API (the provisioner's shape).
  *
@@ -24,6 +27,12 @@
  * nothing here is Kidder- or APM-specific.
  */
 import { metricsQueryPath, type MetricsTransport } from './metrics.js';
+import {
+  createMetricsCatalog,
+  type CatalogTransport,
+  type MetricsCatalog,
+  type MetricsCatalogConfig,
+} from './metrics-catalog.js';
 import { runSearchJob, type SearchHttpClient } from './search-job.js';
 import type { HttpClient } from './provisioner.js';
 
@@ -177,4 +186,33 @@ export function createCellMetricsTransport(cfg: CellCriblConfig): MetricsTranspo
     }
     return resp.text;
   };
+}
+
+/**
+ * The metrics CATALOG transport — what `createMetricsCatalog` needs to
+ * answer "which metrics exist" from the engine's catalog API rather than
+ * the dot-commands that come back empty on some workspaces.
+ *
+ * Deliberately does NOT throw on a non-2xx: those endpoints are
+ * Cribl.Cloud-only, so a 404 is a deployment fact the catalog client
+ * turns into a fallback, not an error worth propagating.
+ */
+export function createCellCatalogTransport(cfg: CellCriblConfig): CatalogTransport {
+  return async (path, signal) => {
+    const resp = await cellCriblFetch(cfg, 'GET', path, { signal });
+    return { status: resp.status, ok: resp.ok, text: resp.text };
+  };
+}
+
+/**
+ * A ready-to-use {@link MetricsCatalog} for a cell: the catalog client
+ * over the cell's authenticated transport. Pass to
+ * `createRunMetricsQueryTool({ catalog })` — this plus the metrics
+ * transport is the whole of what discovery needs from a host.
+ */
+export function createCellMetricsCatalog(
+  cfg: CellCriblConfig,
+  opts: Omit<MetricsCatalogConfig, 'transport'> = {},
+): MetricsCatalog {
+  return createMetricsCatalog({ ...opts, transport: createCellCatalogTransport(cfg) });
 }
