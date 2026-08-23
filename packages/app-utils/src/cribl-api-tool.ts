@@ -96,7 +96,7 @@ export interface WriteApprovals {
  * model does not control between turns — can't invalidate an approval
  * the user genuinely gave.
  */
-export function requestDigest(method: string, path: string, body: unknown): string {
+export function requestDigest(method: string, path: string, body?: unknown): string {
   return `${method.trim().toUpperCase()} ${path.trim()} ${canonicalJson(body)}`;
 }
 
@@ -375,8 +375,11 @@ export function createCriblApiTool(
 
     try {
       const resp = await deps.request(method, path, { body: args.body, signal });
-      const text = truncate(resp.text, maxChars);
-      const content = `${method} ${path} → ${resp.status}\n${text || '(empty response)'}`;
+      const text = truncate(summarizeBody(resp.text), maxChars);
+      const hint = contextHint(resp.status, path) ?? htmlSuccessHint(resp.status, resp.text);
+      const content =
+        `${method} ${path} → ${resp.status}\n${text || '(empty response)'}` +
+        (hint ? `\n\n${hint}` : '');
       return {
         id: call.id,
         name: call.name,
@@ -405,6 +408,74 @@ export function createCriblApiTool(
  */
 function stripContext(path: string): string {
   return path.replace(/^\/(?:m|w)\/[^/]+/, '') || '/';
+}
+
+/**
+ * Whether a path already carries a group/node context.
+ *
+ * The spec contains ZERO `/m/…` paths — context is a base-URL concern
+ * its `info.description` covers only in prose — so this can't be
+ * derived from the digest and has to be checked here.
+ */
+function hasContext(path: string): boolean {
+  return /^\/(?:m|w)\/[^/]+/.test(path);
+}
+
+/**
+ * The one recovery hint worth spending tokens on.
+ *
+ * Verified against a live workspace: every `/search/*` endpoint 404s at
+ * `/api/v1/search/…` and 200s at `/api/v1/m/default_search/search/…`,
+ * while `/apps` is the exact reverse. The spec lists both bare, so a
+ * model following it correctly still gets a 404 half the time, and the
+ * body it gets back doesn't say why. Without this the model's next move
+ * is usually to conclude the endpoint doesn't exist.
+ */
+function contextHint(status: number, path: string): string | undefined {
+  if (status !== 404) return undefined;
+  if (hasContext(path)) {
+    return `Not found. Some endpoints are only served WITHOUT a group context — try ${stripContext(path)}.`;
+  }
+  return `Not found. Many endpoints (notably all of /search/*) are only served under a group context — try /m/default_search${path}. The spec lists paths bare, so this 404 does not mean the endpoint is missing.`;
+}
+
+/**
+ * The nastiest failure this API has, because it doesn't look like one.
+ *
+ * Verified live: `GET /api/v2/apps` returns **200** with 722 bytes of
+ * the web app's HTML shell, not JSON — the workspace serves `/api/v1`
+ * while the published spec describes `/api/v2`, and the unmatched v2
+ * path falls through to the SPA. A caller checking `response.ok` sees
+ * success. A model that gets HTML back on a 200 will usually assume its
+ * request was fine and the data was empty.
+ */
+function htmlSuccessHint(status: number, text: string): string | undefined {
+  if (status < 200 || status >= 300) return undefined;
+  if (!isHtml(text)) return undefined;
+  return 'A 2xx carrying HTML is NOT success: the request fell through to the web app instead of the API. The usual cause is the API version — this workspace serves /api/v1, while the published spec documents /api/v2, and an unmatched path returns the app shell with a 200. Treat this as "endpoint not found at this version".';
+}
+
+function isHtml(text: string): boolean {
+  return /^<(?:!doctype|html)\b/i.test(text.trimStart());
+}
+
+/**
+ * Reduce an HTML error page to one line.
+ *
+ * A 404 from this workspace is `text/html`: a 157-byte Express error
+ * page whose only informative content is `Cannot GET /api/v1/…`. There
+ * is no reason to spend the agent's context on the doctype and head,
+ * and a model shown HTML tends to start reasoning about the HTML.
+ * Anything that isn't recognizably an HTML document passes through
+ * untouched — JSON, NDJSON, and plain text are all the caller's to read.
+ */
+function summarizeBody(text: string): string {
+  const trimmed = text.trimStart();
+  if (!isHtml(text)) return text;
+  const pre = /<pre>([\s\S]*?)<\/pre>/i.exec(trimmed)?.[1]?.trim();
+  const title = /<title>([\s\S]*?)<\/title>/i.exec(trimmed)?.[1]?.trim();
+  const gist = pre || title;
+  return `(HTML response, ${text.length} bytes${gist ? `: ${gist}` : ''}) — an HTML body from a JSON API usually means the path fell through to the web app rather than the API router.`;
 }
 
 function truncate(text: string, max: number): string {

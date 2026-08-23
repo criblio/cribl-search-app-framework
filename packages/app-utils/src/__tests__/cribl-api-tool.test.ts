@@ -166,6 +166,98 @@ describe('call — reads', () => {
   });
 });
 
+describe('call — telling the agent what a confusing response means', () => {
+  // Every string in this block was measured against a live staging
+  // workspace; see the comments on the helpers in cribl-api-tool.ts.
+
+  const HTML_404 =
+    '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Error</title>\n</head>\n<body>\n<pre>Cannot GET /api/v1/search/jobs</pre>\n</body>\n</html>';
+
+  it('reduces an HTML error page to one line', async () => {
+    // The real body is a 157-byte Express page; only "Cannot GET …"
+    // carries information, and a model shown markup reasons about it.
+    const request = vi.fn<CriblApiToolDeps['request']>(async () => ({
+      status: 404,
+      ok: false,
+      text: HTML_404,
+    }));
+    const { tool } = makeTool({ request });
+    const r = await tool(invoke({ action: 'call', method: 'GET', path: '/search/jobs' }));
+    expect(r.content).toContain('Cannot GET /api/v1/search/jobs');
+    expect(r.content).not.toContain('<!DOCTYPE');
+    expect(r.content).not.toContain('<head>');
+  });
+
+  it('suggests the group context on a bare 404', async () => {
+    // /search/* 404s bare and 200s under /m/default_search, and the
+    // spec lists it bare — so this 404 is expected, not fatal.
+    const request = vi.fn<CriblApiToolDeps['request']>(async () => ({
+      status: 404,
+      ok: false,
+      text: HTML_404,
+    }));
+    const { tool } = makeTool({ request });
+    const r = await tool(invoke({ action: 'call', method: 'GET', path: '/search/jobs' }));
+    expect(r.content).toContain('/m/default_search/search/jobs');
+  });
+
+  it('suggests dropping the context on a 404 that already has one', async () => {
+    // /apps is the reverse case: 200 bare, 404 under a group.
+    const request = vi.fn<CriblApiToolDeps['request']>(async () => ({
+      status: 404,
+      ok: false,
+      text: HTML_404,
+    }));
+    const { tool } = makeTool({ request });
+    const r = await tool(invoke({ action: 'call', method: 'GET', path: '/m/default_search/apps' }));
+    expect(r.content).toContain('try /apps');
+  });
+
+  it('flags a 200 that carries HTML as not-success', async () => {
+    // The trap: GET /api/v2/apps → 200 + 722 bytes of the SPA shell.
+    // Anything checking response.ok reads that as a successful call
+    // returning no data.
+    const request = vi.fn<CriblApiToolDeps['request']>(async () => ({
+      status: 200,
+      ok: true,
+      text: '<!DOCTYPE html><html><head><title>Cribl</title></head><body><div id="root"></div></body></html>',
+    }));
+    const { tool } = makeTool({ request });
+    const r = await tool(invoke({ action: 'call', method: 'GET', path: '/apps' }));
+    expect(r.content).toContain('NOT success');
+    expect(r.content).toContain('/api/v1');
+  });
+
+  it('leaves a JSON body completely alone', async () => {
+    const body = '{"items":[{"id":"a"}],"count":1}';
+    const request = vi.fn<CriblApiToolDeps['request']>(async () => ({ status: 200, ok: true, text: body }));
+    const { tool } = makeTool({ request });
+    const r = await tool(invoke({ action: 'call', method: 'GET', path: '/apps' }));
+    expect(r.content).toContain(body);
+    expect(r.content).not.toContain('HTML');
+  });
+
+  it('leaves NDJSON alone even though it is not a single document', async () => {
+    const body = '{"fields":["_time"]}\n{"_time":1}\n';
+    const request = vi.fn<CriblApiToolDeps['request']>(async () => ({ status: 200, ok: true, text: body }));
+    const { tool } = makeTool({ request });
+    const r = await tool(invoke({ action: 'call', method: 'GET', path: '/results' }));
+    expect(r.content).toContain(body);
+  });
+
+  it('caps a huge response', async () => {
+    const request = vi.fn<CriblApiToolDeps['request']>(async () => ({
+      status: 200,
+      ok: true,
+      text: 'x'.repeat(50_000),
+    }));
+    const { tool } = makeTool({ request, maxResponseChars: 500 });
+    const r = await tool(invoke({ action: 'call', method: 'GET', path: '/apps' }));
+    expect(r.content).toContain('truncated (50000 chars total)');
+    expect(r.content.length).toBeLessThan(1_000);
+  });
+});
+
 describe('call — writes are gated on the user', () => {
   it('does NOT send the request on the first attempt', async () => {
     const { store } = memoryApprovals();
