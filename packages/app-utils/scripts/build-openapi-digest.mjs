@@ -150,9 +150,18 @@ ops.sort((a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.meth
 
 const digest = {
   specVersion: doc.info?.version ?? 'unknown',
-  generatedFrom: process.argv[2] ?? SPEC_URL,
+  generatedFrom: provenance(process.argv[2]),
   ops,
 };
+
+/** A URL is reproducible provenance; someone's scratch path is not, so a
+ *  local build records only the file name and says it was local. The
+ *  `specVersion` beside it is what actually identifies the spec. */
+function provenance(source) {
+  if (!source) return SPEC_URL;
+  if (/^https?:\/\//.test(source)) return source;
+  return `${source.split('/').pop()} (local file)`;
+}
 
 const json = `${JSON.stringify(digest)}\n`;
 if (process.argv[3]) writeFileSync(process.argv[3], json);
