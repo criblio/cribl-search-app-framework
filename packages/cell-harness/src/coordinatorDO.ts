@@ -29,6 +29,11 @@ const POLL_INTERVAL_MS = 5 * 60_000;
  *  above any real run: the InvestigationDO caps itself at MAX_TURNS. */
 const ORPHAN_RECLAIM_MS = 20 * 60_000;
 
+/** Session-id prefix when a payload declares none. `inv-` is what every
+ *  session created before `sessionIdPrefix` existed carries, so this
+ *  default is a compatibility constant, not a preference. */
+const DEFAULT_SESSION_ID_PREFIX = 'inv-';
+
 /**
  * Build the coordinator DO class for a payload. Exported by the
  * app's cell entry under the class_name its wrangler.jsonc binds
@@ -37,6 +42,9 @@ const ORPHAN_RECLAIM_MS = 20 * 60_000;
 export function makeCoordinatorDO<TTrigger, TEnv extends CellEnv>(
   payload: CellPayload<TTrigger, TEnv>,
 ): CellDOClass<TEnv> {
+  const idPrefix = payload.sessionIdPrefix ?? DEFAULT_SESSION_ID_PREFIX;
+  const newSessionId = (): string => `${idPrefix}${crypto.randomUUID()}`;
+
   return class CoordinatorDO {
   private readonly state: DurableObjectState;
   private readonly env: TEnv;
@@ -93,7 +101,7 @@ export function makeCoordinatorDO<TTrigger, TEnv extends CellEnv>(
       if (!prompt.trim()) {
         return Response.json({ error: 'prompt required' }, { status: 400 });
       }
-      const id = `inv-${crypto.randomUUID()}`;
+      const id = newSessionId();
       // Synthetic event_id keeps the UNIQUE-column dedupe path intact
       // for interactive rows (they have no alert to dedupe on).
       const eventId = `ui-${crypto.randomUUID()}`;
@@ -254,7 +262,7 @@ export function makeCoordinatorDO<TTrigger, TEnv extends CellEnv>(
       if (!trigger) continue;
       if (hourBudget <= 0) break;
       const facts = payload.triggerFacts(trigger);
-      const id = `inv-${crypto.randomUUID()}`;
+      const id = newSessionId();
       const written = this.state.storage.sql.exec(
         `INSERT INTO investigations
            (id, event_id, alert_id, incident_key, status, alert_json, created_at)
