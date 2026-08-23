@@ -145,10 +145,38 @@ export function assertKqlPredicate(input: string): string {
 
 const SIDE_EFFECT_STAGES = new Set(['send', 'export', 'externaldata']);
 
-/** Validate a complete read-only query within a caller-provided dataset allowlist. */
+/**
+ * Pass instead of an allowlist to accept ANY dataset id while keeping
+ * every other read-only check.
+ *
+ * The allowlist exists for apps scoped to their own dataset, where a
+ * query naming a different one is a bug. It's wrong for a host whose
+ * job is exploring what data a workspace has — there the set of legal
+ * datasets isn't known up front, and an allowlist would have to be
+ * "everything the caller could discover", which is not a list.
+ *
+ * This drops the membership check ONLY. The query must still be a
+ * read-only pipeline with an explicit double-quoted `dataset="…"`
+ * scope: no `;`, no dot-commands, no `send`/`export`/`externaldata`,
+ * balanced delimiters, no computed dataset name. Reading a dataset
+ * the caller shouldn't see is a question for the bearer token's
+ * permissions, which is where it belongs — this function only ever
+ * decided whether a query is a READ, and it still does.
+ *
+ * `Symbol.for` (not a bare `Symbol`) so the identity check holds when
+ * two copies of this module end up loaded at once — which happens
+ * here, since consumers inline the published `dist/` under vitest
+ * while resolving `src/` elsewhere.
+ */
+export const ANY_DATASET = Symbol.for('cribl.app-utils.kql.anyDataset');
+
+/**
+ * Validate a complete read-only query, either within a caller-provided
+ * dataset allowlist or (with {@link ANY_DATASET}) against any dataset.
+ */
 export function assertReadOnlyKql(
   input: string,
-  allowedDatasets: readonly string[],
+  allowedDatasets: readonly string[] | typeof ANY_DATASET,
 ): string {
   const query = input.trim();
   if (!query) throw new KqlSafetyError('search query is required');
@@ -165,8 +193,9 @@ export function assertReadOnlyKql(
       throw new KqlSafetyError(`side-effect operator ${stage} is not allowed`);
     }
   }
-  const allowed = new Set(allowedDatasets.map(kqlDatasetId));
-  allowed.add('$vt_results');
+  const anyDataset = allowedDatasets === ANY_DATASET;
+  const allowed = anyDataset ? null : new Set(allowedDatasets.map(kqlDatasetId));
+  allowed?.add('$vt_results');
   const clauses = [...query.matchAll(/\bdataset\s*=\s*"([^"]+)"/gi)];
   if (clauses.length === 0) throw new KqlSafetyError('query must use an explicit dataset="…" scope');
   const maskedDatasetCount = (masked.match(/\bdataset\s*=/gi) ?? []).length;
@@ -175,9 +204,17 @@ export function assertReadOnlyKql(
   }
   for (const match of clauses) {
     const dataset = match[1];
-    if (!allowed.has(dataset)) {
-      throw new KqlSafetyError(`dataset ${dataset} is outside the investigation scope`);
+    if (allowed) {
+      if (!allowed.has(dataset)) {
+        throw new KqlSafetyError(`dataset ${dataset} is outside the investigation scope`);
+      }
+      continue;
     }
+    // ANY_DATASET still validates the id's SHAPE. Membership is what's
+    // waived, not the character set: the name is interpolated into a
+    // query, so `dataset="a" | send …` hiding in the literal would
+    // otherwise sail through the stage scan above.
+    if (dataset !== '$vt_results') kqlDatasetId(dataset);
   }
   return query;
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ANY_DATASET,
   KqlSafetyError,
   assertKqlPredicate,
   assertReadOnlyKql,
@@ -69,5 +70,46 @@ describe('KQL safety boundary', () => {
     'dataset="otel"; print x=1',
   ])('rejects unsafe complete query %j', (query) => {
     expect(() => assertReadOnlyKql(query, ['otel'])).toThrow(KqlSafetyError);
+  });
+
+  describe('ANY_DATASET', () => {
+    it('accepts a dataset no allowlist would have named', () => {
+      // The point of the mode: a host that explores a workspace can't
+      // enumerate the legal datasets up front.
+      const query = 'dataset="whatever_they_made" | limit 1';
+      expect(assertReadOnlyKql(query, ANY_DATASET)).toBe(query);
+      expect(() => assertReadOnlyKql(query, ['otel'])).toThrow(KqlSafetyError);
+    });
+
+    it.each([
+      'dataset="otel" | send datatype="owned"',
+      'dataset="otel" | export to lookup secrets',
+      'dataset=dynamic_name | limit 1',
+      'dataset="otel"; print x=1',
+      'print x=1',
+      '.show tables',
+      'dataset="otel" | where svc == "x"); drop',
+    ])('still rejects non-read query %j', (query) => {
+      // Waiving membership must waive NOTHING else — a write is still
+      // a write whatever dataset it names.
+      expect(() => assertReadOnlyKql(query, ANY_DATASET)).toThrow(KqlSafetyError);
+    });
+
+    it('rejects a dataset name that is not a plain identifier', () => {
+      // The name reaches a query as-is, so shape is still checked;
+      // only the membership test is waived.
+      expect(() => assertReadOnlyKql('dataset="a b" | limit 1', ANY_DATASET)).toThrow(
+        KqlSafetyError,
+      );
+      expect(() => assertReadOnlyKql('dataset="a\\" | send x" | limit 1', ANY_DATASET)).toThrow(
+        KqlSafetyError,
+      );
+    });
+
+    it('still allows the virtual results dataset', () => {
+      expect(assertReadOnlyKql('dataset="$vt_results" | limit 1', ANY_DATASET)).toContain(
+        '$vt_results',
+      );
+    });
   });
 });
