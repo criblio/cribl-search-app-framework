@@ -1,6 +1,6 @@
 {
   "name": "@criblio/cell-harness",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "Generic server-side agent harness for cells (Worker + Durable Objects on celld): payload seam, coordinator + session DO factories, router/auth/tickets, pi-agent-core turn runner.",
   "main": "./dist/index.js",

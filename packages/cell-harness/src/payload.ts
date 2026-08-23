@@ -108,6 +108,29 @@ export interface CellPayload<TTrigger, TEnv extends CellEnv = CellEnv> {
   /** Group key for a UI-initiated interactive session. */
   interactiveGroupKey(context: InteractiveInput['context']): string;
 
+  /**
+   * Prefix for generated session ids. Defaults to `'inv-'`.
+   *
+   * The harness was written for APM, where a session IS an
+   * investigation, and `inv-` reads correctly. For other payloads it
+   * reads as leaked history — a coding-agent session is not an
+   * investigation.
+   *
+   * Ids are opaque everywhere that matters (they are DO names and route
+   * params, matched as `[A-Za-z0-9-]+`), so a payload may choose its
+   * own. Two constraints, both from that:
+   *
+   * - **Use only `[A-Za-z0-9-]`.** Anything else produces ids the
+   *   router's own path patterns won't match, so the session becomes
+   *   unreachable rather than erroring visibly.
+   * - **Changing it is not retroactive.** A session id is the name its
+   *   Durable Object is addressed by (`idFromName`), so existing rows
+   *   keep the prefix they were created with, forever. Both forms have
+   *   to stay readable — which they are, since nothing parses the
+   *   prefix. Never derive meaning from it.
+   */
+  sessionIdPrefix?: string;
+
   /** Pull-based triggering: fetch the currently-firing trigger rows
    *  (raw — each goes through parseTrigger on admission). Optional;
    *  without it the coordinator's poll alarm only reclaims orphans. */
