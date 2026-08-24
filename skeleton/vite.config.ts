@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'path'
 import react from '@vitejs/plugin-react'
 // @ts-expect-error app-tooling is a Node-only ESM package without declarations
-import { servePackageTgz } from '@cribl/app-tooling/pack'
+import { servePackageTgz } from '@criblio/app-tooling/pack'
 
 const packageEndpointPlugin = () => ({
   name: 'vite-plugin-package-endpoint',
@@ -65,11 +65,11 @@ export default defineConfig({
   plugins: [react(), packageEndpointPlugin(), injectScriptFromQueryPlugin()],
   base: './',
   resolve: {
-    // The @cribl/app-utils package is consumed via a file: link and has
-    // React as a peer dep. Without dedupe, vite/rolldown can't resolve
-    // `react` imports inside the framework's source — those imports start
-    // their lookup from the framework's directory, which has no React.
-    // Dedupe redirects them to the consumer's node_modules.
+    // @criblio/app-utils declares React as a peer dep, so its own tree has
+    // no copy. Dedupe points every `react` / `react-dom` import at the
+    // consumer's node_modules — without it a second React instance can be
+    // resolved for the framework's components, and two Reacts in one page
+    // break hooks at runtime.
     dedupe: ['react', 'react-dom'],
   },
   server: {

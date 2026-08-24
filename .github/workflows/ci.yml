@@ -7,6 +7,9 @@ on:
 
 permissions:
   contents: read
+  # The skeleton job installs the published @criblio packages, and GitHub
+  # Packages requires auth even for public reads.
+  packages: read
 
 jobs:
   packages:
@@ -25,3 +28,35 @@ jobs:
       - run: npm test --workspaces --if-present
       - run: npm run typecheck --workspaces --if-present
       - run: npm run audit --workspaces --if-present
+
+  # Prove a scaffolded app still builds. The skeleton is a template, not a
+  # workspace, so nothing above touches it — and it silently rotted through
+  # the @cribl → @criblio rename: `npm run build` on a fresh clone failed
+  # with TS2307 on both src/api re-exports plus three undeclared
+  # `window.CRIBL_*` globals, and the root-vs-subpath import trap only
+  # shows up in the bundler, never in tsc. All of that is invisible until
+  # someone actually scaffolds an app, which is the worst time to find it.
+  #
+  # Built in a temp copy with APPNAME substituted, exactly as step 2 of
+  # "Creating a new app" in CLAUDE.md instructs.
+  skeleton:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Scaffold an app from the skeleton and build it
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp -R skeleton "$RUNNER_TEMP/scaffolded"
+          cd "$RUNNER_TEMP/scaffolded"
+          # The skeleton ships no lockfile (a template can't pin what the
+          # app will resolve), so this is `npm install`, not `npm ci`.
+          sed -i 's/APPNAME/scaffold-ci/g' package.json
+          npm install --no-audit --no-fund
+          npm run lint
+          npx tsc --noEmit
+          npm run build

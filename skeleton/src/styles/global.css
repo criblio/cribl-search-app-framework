@@ -1,5 +1,7 @@
-/* Cribl Design System tokens + base styles
-   Inlined from @cribl/app-utils until the package is published. */
+/* Cribl Design System tokens + base styles.
+   A standalone copy of @criblio/app-utils/styles/{tokens,base}.css, kept
+   inline so this file is yours to edit — import the package's versions
+   instead if you would rather track the framework. */
 
 @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&display=swap');
 
