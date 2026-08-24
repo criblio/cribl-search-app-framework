@@ -87,8 +87,27 @@ browser bundle.
 - `@cribl/app-utils/cell-cribl` — fills every injection seam for a
   server-side host (a workerd cell has no iframe fetch proxy):
   `createCellSearchHttpClient`, `createCellRunQuery`,
-  `createCellMetricsTransport`, `createCellApiClient`, all from one
-  injected `bearer()`.
+  `createCellMetricsTransport`, `createCellMetricsCatalog`,
+  `createCellApiClient`, all from one injected `bearer()`.
+
+**Metrics discovery goes through the catalog API, not the dot-commands.**
+`.labels` / `.metadata` / `.series <m>` over the metrics *query*
+endpoint return a completed job with **zero rows** on some workspaces —
+no error, indistinguishable from "this workspace has no metrics"
+(verified against one holding 1,187 active metrics and 35,354 series).
+`@cribl/app-utils/metrics-catalog` wraps the engine's real catalog API
+instead; pass a `catalog` to `createRunMetricsQueryTool` (or to
+`listLabels`/`listMetricMetadata`/`listSeries`) and discovery uses it,
+falling back to the dot-command only when the catalog is unreachable —
+those endpoints are `x-cribl-internal` and Cribl.Cloud-only, so a 404
+is a deployment fact rather than a bug. Two path facts the spec does not
+state: the engine id comes from `GET
+/m/default_search/search/local_search/engines` (needs the group
+context, and carries its own `metricsDatasetId`), while everything under
+`/products/lakehouse_engine_metrics/…` takes **no** group context — the
+exact reverse of `/search/*`. `metrics/summary` is ~1 MB and honours no
+`limit`, so the client projects it down to totals plus the highest-
+cardinality metrics rather than passing it through.
 
 **Writes through `cribl_api` require per-call human approval.** A write
 (anything not GET/HEAD/OPTIONS) is *not* executed on first call: the

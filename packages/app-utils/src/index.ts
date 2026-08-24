@@ -104,6 +104,17 @@ export {
   type SearchDatasetInfo,
 } from './metrics.js';
 export {
+  createMetricsCatalog,
+  type CatalogTransport,
+  type CatalogMetadata,
+  type CatalogMetricLabel,
+  type CatalogMetricRow,
+  type CatalogTotals,
+  type LocalSearchEngine,
+  type MetricsCatalog,
+  type MetricsCatalogConfig,
+} from './metrics-catalog.js';
+export {
   newQueryGeneration,
   currentQuerySignal,
   withGenerationSignal,

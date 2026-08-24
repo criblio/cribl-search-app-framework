@@ -1,12 +1,13 @@
 {
   "name": "@criblio/app-utils",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "main": "./dist/index.js",
   "exports": {
     ".": "./dist/index.js",
     "./search": "./dist/search.js",
     "./metrics": "./dist/metrics.js",
+    "./metrics-catalog": "./dist/metrics-catalog.js",
     "./query-generation": "./dist/query-generation.js",
     "./viz": "./dist/viz/index.js",
     "./search-job": "./dist/search-job.js",
