@@ -21,12 +21,13 @@
     "test:e2e": "npx playwright test"
   },
   "dependencies": {
+    "@criblio/app-utils": "^0.7.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.0.0"
   },
   "devDependencies": {
-    "@criblio/app-tooling": "file:../cribl-search-app-framework/packages/app-tooling",
+    "@criblio/app-tooling": "^0.2.0",
     "@eslint/js": "^9.39.4",
     "@playwright/test": "^1.45.0",
     "@types/node": "^22.0.0",

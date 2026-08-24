@@ -19,7 +19,13 @@ inside the Cribl Search sandboxed iframe).
 
 1. Copy the `skeleton/` directory to a new repo.
 2. Find-replace `APPNAME` with your app name in `package.json`.
-3. Run `npm install`.
+3. Run `npm install`. The `@criblio` packages come from GitHub
+   Packages, which requires auth even for public reads, so export a
+   token first: `export NODE_AUTH_TOKEN=$(gh auth token)`. The
+   skeleton's `.npmrc` wires the scope to that registry; without the
+   token npm falls through to npmjs and reports a bare 404 rather
+   than an auth failure. In CI, `${{ github.token }}` plus
+   `permissions: packages: read` is enough.
 4. Copy `.env.example` to `.env` and fill in your Cribl Cloud
    credentials.
 5. Optional: `scripts/cribl-mcp.sh start` to run the Cribl MCP
@@ -219,10 +225,11 @@ When making framework changes:
 2. Edit `skeleton/*` for the clone-ready template. Changes here
    ship to every NEW app, but do NOT auto-propagate to existing
    apps — those copies were taken at scaffold time.
-3. Existing consumer apps pull `@cribl/app-utils` and
-   `@cribl/app-tooling` via `file:` paths in their `package.json`, so
-   framework changes are consumed through an explicit SHA bump without
-   a registry publish step.
+3. Consumer apps pull `@criblio/app-utils` and `@criblio/app-tooling`
+   as versioned deps from GitHub Packages, so framework changes reach
+   them through a publish plus a semver bump — not a `file:` path or a
+   SHA pin. Skeleton CI installs from the registry the same way, which
+   is what keeps the template honest about what a real app resolves.
 4. Run `npm test && npm run typecheck` inside `packages/app-utils/`;
    consumers run their own lint + build as an integration gate.
 
