@@ -11,6 +11,8 @@ import {
   isWriteMethod,
   matchOperation,
   searchOperations,
+  searchTerms,
+  unmatchedTerms,
   type OpenApiDigest,
 } from '../openapi-digest.js';
 import generated from '../openapi-digest.json' with { type: 'json' };
@@ -43,10 +45,79 @@ describe('isWriteMethod', () => {
   });
 });
 
+describe('searchTerms', () => {
+  it('splits on anything that is not a path character', () => {
+    expect(searchTerms('Create a search-job {id}!')).toEqual([
+      'create',
+      'a',
+      'search-job',
+      '{id}',
+    ]);
+  });
+
+  it('de-duplicates so a repeated word cannot score twice', () => {
+    expect(searchTerms('metrics METRICS metrics')).toEqual(['metrics']);
+  });
+});
+
 describe('searchOperations', () => {
-  it('requires every term to match', () => {
-    expect(searchOperations(DIGEST, 'search jobs')).not.toHaveLength(0);
-    expect(searchOperations(DIGEST, 'search unicorns')).toHaveLength(0);
+  it('prefers operations matching every term', () => {
+    const hits = searchOperations(DIGEST, 'search jobs');
+    expect(hits).not.toHaveLength(0);
+    // Every returned hit covers the whole query, and `/apps` — which
+    // matches neither word — is nowhere in it.
+    expect(hits.every((h) => h.terms.length === 2)).toBe(true);
+    expect(hits.map((h) => h.op.path)).not.toContain('/apps');
+  });
+
+  it('does not dilute a full match with partial ones', () => {
+    // The AND is what keeps "search unicorns" from returning the whole
+    // /search family; the fallback below must not undo that when
+    // something genuinely matches everything.
+    const hits = searchOperations(DIGEST, 'apps listApps');
+    expect(hits.map((h) => h.op.path)).toEqual(['/apps']);
+  });
+
+  it('falls back to partial matches instead of answering nothing', () => {
+    // The real report: a model looking for Stream metrics wrote nine
+    // words, no endpoint had all nine, and an AND-only search said "no
+    // endpoints matched" about a spec that documents the endpoint. The
+    // words it got right have to survive the ones it got wrong.
+    const hits = searchOperations(DIGEST, 'search jobs unicorns rainbows');
+    expect(hits).not.toHaveLength(0);
+    expect(hits[0].op.path).toBe('/search/jobs');
+    // And the hit reports what it actually matched, so a caller can say
+    // which words were ignored rather than presenting a loose list as
+    // an exact one.
+    expect(hits[0].terms.sort()).toEqual(['jobs', 'search']);
+  });
+
+  it('ranks a partial fallback by score, not by term coverage', () => {
+    // Coverage is the tempting metric and the wrong one: broad words
+    // pair up by accident. Here `/apps` matches two weak summary words
+    // while `/search/jobs` matches one strong path word — and the path
+    // hit is what the caller meant.
+    const d: OpenApiDigest = {
+      specVersion: 't',
+      ops: [
+        { method: 'GET', path: '/search/jobs', tag: 'search' },
+        { method: 'GET', path: '/apps', summary: 'Installed things per tenant' },
+      ],
+    };
+    const hits = searchOperations(d, 'jobs per tenant');
+    expect(hits[0].op.path).toBe('/search/jobs');
+    expect(hits[0].terms).toEqual(['jobs']);
+    expect(hits[1].terms).toEqual(['per', 'tenant']);
+  });
+
+  it('finds the real metrics endpoint from an over-specified query', () => {
+    // Verbatim from the session that prompted this change.
+    const hits = searchOperations(
+      generated as OpenApiDigest,
+      'Stream worker input output metrics statistics event bytes per second',
+    );
+    const paths = hits.slice(0, 5).map((h) => h.op.path);
+    expect(paths).toContain('/system/metrics/query');
   });
 
   it('prefers the plainest path over a deep templated one', () => {
@@ -70,6 +141,35 @@ describe('searchOperations', () => {
   it('honours limit and returns nothing for an empty query', () => {
     expect(searchOperations(DIGEST, 'jobs', { limit: 2 })).toHaveLength(2);
     expect(searchOperations(DIGEST, '   ')).toHaveLength(0);
+  });
+
+  it('still returns nothing when no term appears anywhere', () => {
+    // The fallback is partial, not unconditional: a query with no
+    // purchase at all must still come back empty so the caller can say
+    // so, rather than being handed an arbitrary top-40.
+    expect(searchOperations(DIGEST, 'unicorns rainbows')).toHaveLength(0);
+  });
+});
+
+describe('unmatchedTerms', () => {
+  it('names the words that appear in no operation', () => {
+    expect(unmatchedTerms(DIGEST, 'search unicorns jobs rainbows')).toEqual([
+      'unicorns',
+      'rainbows',
+    ]);
+  });
+
+  it('is empty when every word lands somewhere', () => {
+    expect(unmatchedTerms(DIGEST, 'search apps')).toEqual([]);
+    expect(unmatchedTerms(DIGEST, '')).toEqual([]);
+  });
+
+  it('ignores the method and writes filters', () => {
+    // "Does this word exist in the spec" is a different question from
+    // "did the filtered search return anything", and conflating them
+    // tells a model to reword a query whose only problem was a filter.
+    expect(unmatchedTerms(DIGEST, 'cancel')).toEqual([]);
+    expect(searchOperations(DIGEST, 'cancel', { method: 'GET' })).toHaveLength(0);
   });
 });
 

@@ -106,6 +106,58 @@ export interface SearchOptions {
 export interface SearchHit {
   op: DigestOp;
   score: number;
+  /** Which of the query's terms this operation actually matched. Fewer
+   *  than the whole query means the search fell back to partial
+   *  matching — see {@link searchOperations}. Callers should say so
+   *  rather than presenting a loose list as an exact answer. */
+  terms: string[];
+}
+
+/**
+ * Split a free-text query into the terms the scorer matches on.
+ *
+ * Exported so a caller can report which of the user's own words did
+ * nothing — the difference between "no endpoint does this" and "you
+ * used two words that appear nowhere in any spec" is the whole
+ * difference between a dead end and a next move.
+ */
+export function searchTerms(query: string): string[] {
+  // De-duplicated: a repeated word would otherwise score twice and
+  // inflate its operation over an equally relevant one.
+  return [...new Set(query.toLowerCase().split(/[^a-z0-9_.{}-]+/i).filter(Boolean))];
+}
+
+/** The four fields a term is matched against, lowercased once. */
+interface OpText {
+  path: string;
+  id: string;
+  tag: string;
+  summary: string;
+}
+
+function opText(op: DigestOp): OpText {
+  return {
+    path: op.path.toLowerCase(),
+    id: (op.operationId ?? '').toLowerCase(),
+    tag: (op.tag ?? '').toLowerCase(),
+    summary: (op.summary ?? '').toLowerCase(),
+  };
+}
+
+/**
+ * How strongly one term matches one operation; 0 means not at all.
+ *
+ * Weighted by how much a field says about what an endpoint IS: the path
+ * is the strongest signal, the summary the weakest.
+ */
+function scoreTerm(t: OpText, term: string): number {
+  let score = 0;
+  if (t.path.includes(term)) score += 10;
+  if (t.id.includes(term)) score += 6;
+  if (t.tag === term) score += 6;
+  else if (t.tag.includes(term)) score += 3;
+  if (t.summary.includes(term)) score += 2;
+  return score;
 }
 
 /**
@@ -114,46 +166,51 @@ export interface SearchHit {
  * Deliberately a plain scorer, not a fuzzy index: the corpus is ~900
  * short strings, the queries are things like "create a search job" or
  * "kvstore", and the cost of a wrong ranking is one extra tool call.
- * Every term must appear somewhere (AND, not OR) — an OR over 900
- * operations returns everything that mentions "search", which is not
- * an answer.
+ *
+ * Operations matching EVERY term win outright, and if any exist they
+ * are the whole result — that AND is what stops "search unicorns" from
+ * returning the several hundred endpoints that merely say "search".
+ * When nothing matches every term, though, the answer is not silence:
+ * it falls back to everything matching at least one, ranked by the same
+ * score. A model asked to find Stream metrics wrote "Stream worker
+ * input output metrics statistics event bytes per second" — ten terms,
+ * no endpoint has all ten, and the AND-only version answered "no
+ * endpoints matched" about a spec that describes `/system/metrics/query`
+ * one summary line away. Under the fallback that endpoint ranks third.
+ *
+ * The fallback ranks by SCORE, not by how many terms an operation
+ * covers. Coverage sounds better and measures worse: on that same
+ * query the highest-coverage hits were `/system/inputs/{id}/pq` and
+ * `/search/event-breaker-preview` — "input"+"per" (from
+ * "persistent") and "output"+"event" — while every `/system/metrics*`
+ * endpoint matched the one term that mattered. Broad words pair up by
+ * accident; a single strong path hit does not.
  */
 export function searchOperations(
   digest: OpenApiDigest,
   query: string,
   opts: SearchOptions = {},
 ): SearchHit[] {
-  const terms = query.toLowerCase().split(/[^a-z0-9_.{}-]+/i).filter(Boolean);
+  const terms = searchTerms(query);
+  if (terms.length === 0) return [];
   const wantMethod = opts.method?.trim().toUpperCase();
-  const hits: SearchHit[] = [];
+  const full: SearchHit[] = [];
+  const partial: SearchHit[] = [];
 
   for (const op of digest.ops) {
     if (wantMethod && op.method !== wantMethod) continue;
     if (opts.writes !== undefined && isWriteMethod(op.method) !== opts.writes) continue;
 
-    const path = op.path.toLowerCase();
-    const id = (op.operationId ?? '').toLowerCase();
-    const tag = (op.tag ?? '').toLowerCase();
-    const summary = (op.summary ?? '').toLowerCase();
-
+    const text = opText(op);
     let score = 0;
-    let matchedAll = true;
+    const matched: string[] = [];
     for (const term of terms) {
-      // Weighted by how much a field says about what an endpoint IS:
-      // the path is the strongest signal, the summary the weakest.
-      let termScore = 0;
-      if (path.includes(term)) termScore += 10;
-      if (id.includes(term)) termScore += 6;
-      if (tag === term) termScore += 6;
-      else if (tag.includes(term)) termScore += 3;
-      if (summary.includes(term)) termScore += 2;
-      if (termScore === 0) {
-        matchedAll = false;
-        break;
-      }
+      const termScore = scoreTerm(text, term);
+      if (termScore === 0) continue;
+      matched.push(term);
       score += termScore;
     }
-    if (!matchedAll || terms.length === 0) continue;
+    if (matched.length === 0) continue;
 
     // Prefer the plainest endpoint that matches: a shorter path with
     // fewer template segments is nearly always the one a caller means
@@ -163,9 +220,10 @@ export function searchOperations(
     // SDK-supported routes outrank internal ones at equal relevance.
     if (op.internal) score -= 5;
 
-    hits.push({ op, score });
+    (matched.length === terms.length ? full : partial).push({ op, score, terms: matched });
   }
 
+  const hits = full.length > 0 ? full : partial;
   hits.sort(
     (a, b) =>
       b.score - a.score ||
@@ -173,6 +231,27 @@ export function searchOperations(
       a.op.method.localeCompare(b.op.method),
   );
   return hits.slice(0, opts.limit ?? 40);
+}
+
+/**
+ * The query terms that appear in no operation at all.
+ *
+ * Ignores the method/writes filters on purpose: this answers "is this
+ * word in the spec anywhere", which is what a caller needs to tell a
+ * model to drop it. Filter-induced emptiness is a different message.
+ */
+export function unmatchedTerms(digest: OpenApiDigest, query: string): string[] {
+  const terms = searchTerms(query);
+  if (terms.length === 0) return [];
+  const remaining = new Set(terms);
+  for (const op of digest.ops) {
+    if (remaining.size === 0) break;
+    const text = opText(op);
+    for (const term of [...remaining]) {
+      if (scoreTerm(text, term) > 0) remaining.delete(term);
+    }
+  }
+  return terms.filter((t) => remaining.has(t));
 }
 
 /** One-line rendering of an operation, for a list of search results. */

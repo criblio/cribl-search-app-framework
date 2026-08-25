@@ -115,6 +115,28 @@ exact reverse of `/search/*`. `metrics/summary` is ~1 MB and honours no
 `limit`, so the client projects it down to totals plus the highest-
 cardinality metrics rather than passing it through.
 
+**`cribl_api` search is AND-first with a partial FALLBACK, ranked by
+score and never by term coverage.** An operation matching every term
+wins outright and, if any exist, they are the whole result — that AND is
+what stops "search unicorns" returning the several hundred endpoints
+that merely say "search". But when nothing matches every term the answer
+must not be silence: a model hunting Stream metrics wrote *"Stream
+worker input output metrics statistics event bytes per second"*, ten
+terms, and the AND-only version reported "no endpoints matched" about a
+spec that documents `/system/metrics/query` one summary line away.
+Under the fallback that endpoint ranks third. Rank the fallback by
+score, **not** by how many terms an operation covers: on that same query
+the highest-coverage hits were `/system/inputs/{id}/pq` and
+`/search/event-breaker-preview` — "input"+"per" (from *persistent*) and
+"output"+"event" — while every `/system/metrics*` endpoint matched the
+one term that mattered. Broad words pair up by accident; a single strong
+path hit does not. A `SearchHit` carries the terms it matched so the
+tool can name what it ignored, and `unmatchedTerms()` answers the
+different question "is this word in the spec at all" — a query emptied
+by a `method`/`writesOnly` filter needs the filter dropped, not
+rewording, and one generic dead-end message for both sends a model in a
+circle.
+
 **Writes through `cribl_api` require per-call human approval.** A write
 (anything not GET/HEAD/OPTIONS) is *not* executed on first call: the
 tool records a `PendingWrite` and returns an approval id. The user

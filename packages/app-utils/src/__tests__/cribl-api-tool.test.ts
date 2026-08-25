@@ -95,10 +95,45 @@ describe('search', () => {
     expect(r.content.indexOf('/search/jobs')).toBeLessThan(r.content.indexOf('/search/jobs/{id}'));
   });
 
-  it('requires every term to match, so a broad word does not return everything', async () => {
+  it('falls back to a partial match and says which words it ignored', async () => {
+    // The report this came from: the model described what it wanted in
+    // nine words, no endpoint carried all nine, and the tool answered
+    // "no endpoints matched" about a spec that documents the endpoint.
+    // A partial answer that admits it is partial beats a dead end — but
+    // it must admit it, or the model treats a loose list as the truth.
     const { tool } = makeTool();
-    const r = await tool(invoke({ action: 'search', query: 'search nonexistentword' }));
+    const r = await tool(
+      invoke({ action: 'search', query: 'search jobs nonexistentword alsomissing' }),
+    );
+    expect(r.content).toContain('/search/jobs');
+    expect(r.content).toContain('No endpoint matches all of');
+    expect(r.content).toContain('ignoring: nonexistentword, alsomissing');
+  });
+
+  it('does not claim a partial match when every term landed', async () => {
+    const { tool } = makeTool();
+    const r = await tool(invoke({ action: 'search', query: 'search jobs' }));
+    expect(r.content).not.toContain('No endpoint matches all of');
+    expect(r.content).not.toContain('ignoring:');
+  });
+
+  it('names the dead words when nothing matches at all', async () => {
+    // The old message said "every search term has to appear somewhere"
+    // without saying which one did not, which is unactionable advice
+    // for a query the model wrote itself.
+    const { tool } = makeTool();
+    const r = await tool(invoke({ action: 'search', query: 'unicorns rainbows' }));
     expect(r.content).toContain('No Cribl API endpoints matched');
+    expect(r.content).toContain('unicorns, rainbows');
+  });
+
+  it('blames the filter, not the words, when the filter is what emptied it', async () => {
+    // "apps" exists; there is no writing /apps endpoint. Telling the
+    // model to reword would send it in a circle.
+    const { tool } = makeTool();
+    const r = await tool(invoke({ action: 'search', query: 'apps', writesOnly: true }));
+    expect(r.content).toContain('drop the filter');
+    expect(r.content).not.toContain('None of these words');
   });
 
   it('can restrict to writes', async () => {
