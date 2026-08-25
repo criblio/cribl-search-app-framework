@@ -21,7 +21,22 @@ export { cellRouter } from './router';
 export { makeCoordinatorDO } from './coordinatorDO';
 export { makeSessionDO, capEvent } from './sessionDO';
 export { mintTicket, verifyTicket } from './tickets';
-export { runRealTurn, type LlmConfig, type RealTurnResult } from './realTurn';
+export {
+  runRealTurn,
+  classifyReply,
+  type LlmConfig,
+  type RealTurnResult,
+  type UnusableReply,
+} from './realTurn';
+export {
+  DEFAULT_CONTEXT_WINDOW,
+  DEFAULT_MAX_TOKENS,
+  estimateTokens,
+  estimateMessageTokens,
+  resolveContextConfig,
+  type ContextConfig,
+  type ContextSummary,
+} from './compaction';
 export { mapPiEvent, toolCallsOf } from './loopEventMap';
 export type { CellDOClass, CellEnv } from './env';
 export type {

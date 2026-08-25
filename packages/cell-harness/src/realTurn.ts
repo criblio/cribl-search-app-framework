@@ -29,6 +29,7 @@ import type { AgentToolDefinition } from '@criblio/app-utils/agent';
 import type { ToolExecutors } from './payload';
 import type { WireLoopEvent } from '@criblio/agent-protocol';
 import { mapPiEvent, toolCallsOf } from './loopEventMap';
+import { DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_TOKENS } from './compaction';
 
 export interface LlmConfig {
   baseUrl: string;
@@ -44,6 +45,22 @@ export interface LlmConfig {
    * on most providers.
    */
   vision?: boolean;
+  /**
+   * Declared input window. Inert as far as pi-agent-core is concerned
+   * (its own default is 0 and it never reads this), so it neither
+   * clamps nor warns — it is here because the compaction policy is
+   * derived from it, and because raising it is the whole of "use the
+   * model's bigger window".
+   */
+  contextWindow?: number;
+  /**
+   * Output budget for one turn. On an OpenAI-completions endpoint this
+   * is shared between reasoning and the answer, which is how a turn can
+   * spend all of it and still come back with `content: null`. Raising
+   * it raises turn latency directly — measured, latency tracks output
+   * tokens and not input size — so it trades against TURN_TIMEOUT_MS.
+   */
+  maxTokens?: number;
 }
 
 /** Hard cap on a single coalesced assistant-text event (chars). */
@@ -80,6 +97,26 @@ function capText(text: string): string {
   return text.length > MAX_TEXT_CHARS ? text.slice(0, MAX_TEXT_CHARS) : text;
 }
 
+/**
+ * Why a turn produced nothing the loop can act on, when the stream
+ * itself reported success.
+ *
+ * - `empty` — no text and no tool calls. Seen in production
+ *   2026-08-24: three consecutive turns, including a bare "Are you
+ *   there? Respond with yes/no", came back with nothing at all.
+ * - `truncated` — the same, with the provider reporting
+ *   `finish_reason: length`: the entire output budget went to a
+ *   response that never arrived. Reproduced against the live model at
+ *   `maxTokens: 16_384` with a 205k-token prompt.
+ *
+ * Both used to be indistinguishable from "the model is finished",
+ * because `done` is computed from "no tool calls" — so the session
+ * appended `done` and parked at `idle` reporting success, with no
+ * error frame and a healthy status. Naming the case is what lets the
+ * DO retry it and, failing that, say so out loud.
+ */
+export type UnusableReply = 'empty' | 'truncated';
+
 export interface RealTurnResult {
   /** New pi messages to append to agent_messages (assistant + tool results). */
   newMessages: Message[];
@@ -90,6 +127,45 @@ export interface RealTurnResult {
   done: boolean;
   /** Set when the LLM stream itself failed; the DO fails the run. */
   errorMessage: string | null;
+  /** Set when the stream SUCCEEDED but its answer is unusable. Always
+   *  accompanied by `errorMessage`; the DO uses it to decide that a
+   *  retry is worth attempting, which it is not for a real stream
+   *  failure. */
+  unusable: UnusableReply | null;
+}
+
+/** Concatenated text parts of an assistant message. */
+function assistantText(msg: AssistantMessage): string {
+  return msg.content
+    .filter((c): c is Extract<typeof c, { type: 'text' }> => c.type === 'text')
+    .map((c) => c.text)
+    .join('');
+}
+
+/**
+ * Classify a completed assistant message the loop cannot act on.
+ *
+ * A message carrying tool calls is never unusable, whatever its stop
+ * reason: the loop has real work to do, and a truncated argument list
+ * surfaces to the model as a tool-execution failure it can react to.
+ * A truncated message that DID produce text is not unusable either —
+ * the user gets a cut-off answer plus a notification, which is a worse
+ * answer rather than no answer.
+ */
+export function classifyReply(msg: AssistantMessage): UnusableReply | null {
+  if (toolCallsOf(msg.content).length > 0) return null;
+  if (assistantText(msg).trim().length > 0) return null;
+  return msg.stopReason === 'length' ? 'truncated' : 'empty';
+}
+
+/** Drop trailing assistant messages. Used only when the final message
+ *  was unusable: persisting it would replay an empty turn for the rest
+ *  of the session AND leave the stored history ending on an assistant
+ *  message, which is not a turn boundary `Agent.continue()` accepts. */
+function dropTrailingAssistant(messages: Message[]): Message[] {
+  const out = [...messages];
+  while (out.length > 0 && out[out.length - 1].role === 'assistant') out.pop();
+  return out;
 }
 
 function piModel(cfg: LlmConfig): Model<'openai-completions'> {
@@ -107,14 +183,23 @@ function piModel(cfg: LlmConfig): Model<'openai-completions'> {
     // Cost accounting is not meaningful against arbitrary
     // OpenAI-compatible endpoints; zeros keep pi's usage math inert.
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 16_384,
+    contextWindow: cfg.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    maxTokens: cfg.maxTokens ?? DEFAULT_MAX_TOKENS,
   };
 }
 
+/** The model descriptor a turn would use — exported so the DO can
+ *  build the summarizer's model from the same config without
+ *  duplicating the mapping. */
+export function turnModel(cfg: LlmConfig): Model<'openai-completions'> {
+  return piModel(cfg);
+}
+
 /** The production stream function: pi-ai's OpenAI-completions API.
- *  The loop passes {apiKey, signal} through in options. */
-const openAiCompletionsStream: StreamFn = (model, context, options) =>
+ *  The loop passes {apiKey, signal} through in options. Exported so the
+ *  DO's summarizer call reaches the same endpoint through the same
+ *  seam. */
+export const defaultStreamFn: StreamFn = (model, context, options) =>
   stream(model as Model<'openai-completions'>, context, options);
 
 /**
@@ -205,7 +290,7 @@ export async function runRealTurn(opts: {
       tools: agentTools,
       messages: history,
     },
-    streamFn: opts.streamFn ?? openAiCompletionsStream,
+    streamFn: opts.streamFn ?? defaultStreamFn,
     getApiKey: () => llm.apiKey,
     // One LLM call + its tool executions per alarm — the DO owns the
     // loop across turns.
@@ -235,11 +320,30 @@ export async function runRealTurn(opts: {
         if (ev.message.role !== 'assistant') return;
         const msg = ev.message as AssistantMessage;
         final = msg;
-        if (msg.stopReason === 'error' || msg.stopReason === 'aborted') {
+        if (
+          msg.stopReason === 'error' ||
+          msg.stopReason === 'aborted' ||
+          // An unusable reply takes the SAME path as a failed stream.
+          // Emitting assistantDone here is what made the production
+          // failure silent: the DO reads it as a completed answer and
+          // parks at idle with a healthy status.
+          classifyReply(msg) !== null
+        ) {
           // Failed turn: keep whatever text streamed, no assistantDone
           // (the DO appends the error event from errorMessage).
           flushText();
           return;
+        }
+        if (msg.stopReason === 'length') {
+          // Usable but cut short — there IS text or a tool call. Not an
+          // error: the user keeps the partial answer. But silence here
+          // reads as a model that chose to stop mid-sentence.
+          emit({
+            kind: 'notification',
+            turnId,
+            content:
+              'The response was cut off at the model output limit. Ask it to continue if the answer looks incomplete.',
+          });
         }
         const calls = toolCallsOf(msg.content);
         const concluding =
@@ -311,14 +415,32 @@ export async function runRealTurn(opts: {
   // TS can't see the closure assignment in subscribe(); rebind wide.
   const finalMsg = final as AssistantMessage | null;
   let errorMessage = agent.state.errorMessage ?? thrown ?? null;
+  let unusable: UnusableReply | null = null;
   if (timedOut) {
     errorMessage = `LLM turn timed out after ${Math.round(TURN_TIMEOUT_MS / 1000)}s`;
   }
   if (!finalMsg && !errorMessage) {
     errorMessage = 'LLM stream ended without a message';
   }
+  if (finalMsg && !errorMessage) {
+    // The stream reported success. Whether the ANSWER is usable is a
+    // separate question, and the one that used to go unasked.
+    unusable = classifyReply(finalMsg);
+    if (unusable === 'truncated') {
+      errorMessage =
+        'The model spent its entire output budget without producing an answer (finish_reason: length).';
+    } else if (unusable === 'empty') {
+      errorMessage = 'The model returned an empty response — no text and no tool call.';
+    }
+  }
   if (!finalMsg || errorMessage) {
-    return { newMessages, conclusion: null, done: false, errorMessage };
+    return {
+      newMessages: unusable ? dropTrailingAssistant(newMessages) : newMessages,
+      conclusion: null,
+      done: false,
+      errorMessage,
+      unusable,
+    };
   }
 
   // Terminal conditions mirror the client loop: the concluding tool
@@ -326,5 +448,5 @@ export async function runRealTurn(opts: {
   // final answer.
   const calls = toolCallsOf(finalMsg.content);
   const done = conclusion != null || calls.length === 0;
-  return { newMessages, conclusion, done, errorMessage: null };
+  return { newMessages, conclusion, done, errorMessage: null, unusable: null };
 }

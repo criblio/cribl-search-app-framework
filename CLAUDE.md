@@ -192,6 +192,33 @@ person deciding.
 - `<ResilienceBoundary>` — router-free root/panel render containment
   with retry and an optional app-owned fallback renderer
 
+### @criblio/cell-harness
+
+**A long session used to die silently, and nothing bounded its history.**
+Both are fixed; the policy and how to reverse it are in
+`packages/cell-harness/CONTEXT.md`, which is the file to read before
+touching `compaction.ts`, `history()`, or the turn runner's terminal
+conditions. Three facts worth carrying without reading it:
+
+- **An empty assistant message is a failure, not an answer.** `done` is
+  computed from "no tool calls", so an empty reply used to be
+  indistinguishable from "the model is finished" — the session appended
+  `done` and parked at `idle` reporting success, with no error frame.
+  `classifyReply()` names that case (and `finish_reason: length` with
+  nothing in it); both take the failed-turn path, are not persisted, and
+  get one compact-then-retry before failing out loud.
+- **Compaction is a separate alarm step, never part of a turn.** A
+  summarizer call inside the turn it protects adds its latency to the
+  same ~300s handler budget, and blowing that kills the celld *process*.
+  If the summarizer fails, the cut happens anyway with a mechanical
+  digest — an outage there must not park a session.
+- **`contextWindow` is inert.** pi-agent-core never reads it (its own
+  default is 0), so it clamps nothing; a 205k-token prompt was measured
+  going out and being served. Its real job is being the number every
+  compaction threshold derives from, which is what makes "use the
+  model's bigger window" a config change (`LLM_CONTEXT_WINDOW`) rather
+  than a code change. Raising it alone buys nothing.
+
 ### @cribl/app-tooling
 
 Node-only commands shared by every consumer app:
