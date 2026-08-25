@@ -39,6 +39,38 @@ export interface CellEnv {
    *  a request that carries image parts to a text-only model. */
   LLM_VISION?: string;
 
+  // ── Context management (see compaction.ts and CONTEXT.md) ──
+  /**
+   * Declared input window (default 200,000). pi-agent-core never reads
+   * it, so it clamps nothing on its own — its real job here is to be
+   * the number the whole compaction policy is derived from. Raising it
+   * for a model with a bigger window raises the compaction point with
+   * it, which is what makes that a config change rather than a code
+   * change.
+   */
+  LLM_CONTEXT_WINDOW?: string;
+  /**
+   * Output budget for one turn (default 16,384). Shared between
+   * reasoning and the answer on an OpenAI-completions endpoint.
+   * Raising it raises turn latency directly — latency tracks output
+   * tokens, not input size — so it trades against the 180s turn
+   * timeout and, beyond that, celld's ~300s handler budget.
+   */
+  LLM_MAX_TOKENS?: string;
+  /** "off" disables summarizing compaction. Tool-result bounding stays
+   *  on regardless: it needs no LLM call and cannot fail. An escape
+   *  hatch for a summarizer problem in production, not a default. */
+  CONTEXT_COMPACTION?: string;
+  /** Compact when the prompt estimate crosses this many tokens
+   *  (default: half the declared window). */
+  CONTEXT_COMPACT_AT?: string;
+  /** Compact until the estimate is at or under this many tokens
+   *  (default: 30% of the declared window). */
+  CONTEXT_COMPACT_TARGET?: string;
+  /** Verbatim budget for older tool results, in characters
+   *  (default: 15% of the window, converted at 4 chars/token). */
+  CONTEXT_TOOL_RESULT_BUDGET?: string;
+
   // ── Source-code workspace (optional) ──
   /** JSON array of source repos the agent may check out, e.g.
    *  `[{"url":"github.com/org/repo","service":"*"}]`. Absent ⇒ code

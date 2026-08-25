@@ -44,7 +44,20 @@ import {
   type ServerFrame,
   type WireLoopEvent,
 } from '@criblio/agent-protocol';
-import { runRealTurn, type LlmConfig } from './realTurn';
+import { defaultStreamFn, runRealTurn, turnModel, type LlmConfig } from './realTurn';
+import {
+  SUMMARY_MAX_TOKENS,
+  boundToolResults,
+  estimateTokens,
+  foldSummary,
+  mechanicalSummary,
+  planCompaction,
+  resolveContextConfig,
+  summarizeSpan,
+  summaryMessage,
+  userQuotesOf,
+  type ContextSummary,
+} from './compaction';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
 import type { Message, UserMessage } from '@earendil-works/pi-ai';
 
@@ -83,6 +96,27 @@ const TURN_WATCHDOG_MS = 240_000;
  */
 const MAX_WATCHDOG_ATTEMPTS = 3;
 const WATCHDOG_ATTEMPTS_KEY = 'watchdogAttempts';
+
+/** Everything compacted out of model history so far (see
+ *  compaction.ts). A KV entry, not a row: `history()` scans
+ *  `agent_messages` every turn, and this is read by key. */
+const CONTEXT_SUMMARY_KEY = 'contextSummary';
+/** Last computed prompt-token estimate, so GET /status can report it
+ *  without rescanning the message table on a route the UI polls every
+ *  few seconds. */
+const CONTEXT_TOKENS_KEY = 'contextTokens';
+/**
+ * Strike count for a turn that came back unusable (empty, or truncated
+ * with nothing in it).
+ *
+ * One retry, and only one. The failure is intermittent — retries at the
+ * same history size sometimes answer — so a single retry recovers the
+ * common case; more than one turns a silent failure into an expensive
+ * silent failure, since every attempt re-sends the whole history.
+ * Durable because the retry happens on a later alarm.
+ */
+const UNUSABLE_RETRY_KEY = 'unusableReplyRetry';
+const MAX_UNUSABLE_RETRIES = 1;
 
 // Persisted-event size caps. Real staging metrics/search results are
 // far larger than the stub's canned events, and every event is stored
@@ -180,6 +214,13 @@ export function capEvent(ev: WireLoopEvent): WireLoopEvent {
     };
   }
   return out;
+}
+
+/** Token counts for humans: "148k", "9.4k", "600". */
+function kTokens(n: number): string {
+  if (n < 1_000) return String(n);
+  const k = n / 1_000;
+  return `${k < 10 ? k.toFixed(1) : Math.round(k)}k`;
 }
 
 /** Parse the cell's REPOS_JSON env into a repo list (empty on any
@@ -671,6 +712,14 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
           return c ? JSON.parse(c) : null;
         })(),
         latestSeq: this.latestSeq(),
+        // Context accounting. Read from KV rather than recomputed:
+        // /status is polled every few seconds and the estimate costs a
+        // full agent_messages scan. Null until the first turn has run.
+        contextTokens:
+          (await this.state.storage.get<number>(CONTEXT_TOKENS_KEY)) ?? null,
+        contextWindow: resolveContextConfig(this.env).contextWindow,
+        compactions:
+          (await this.state.storage.get<ContextSummary>(CONTEXT_SUMMARY_KEY))?.rounds ?? 0,
       });
     }
 
@@ -719,11 +768,14 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
 
   private llmConfig(): LlmConfig | null {
     if (!this.env.LLM_BASE_URL) return null;
+    const cfg = resolveContextConfig(this.env);
     return {
       baseUrl: this.env.LLM_BASE_URL,
       apiKey: this.env.LLM_API_KEY ?? '',
       model: this.env.LLM_MODEL ?? 'gpt-4.1',
       vision: this.env.LLM_VISION === 'true',
+      contextWindow: cfg.contextWindow,
+      maxTokens: cfg.maxTokens,
     };
   }
 
@@ -871,12 +923,48 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
    * degrade to a text marker.
    */
   private async history(): Promise<Message[]> {
+    const { messages, tokens } = await this.buildHistory();
+    // Recorded so GET /status can report the session's size without
+    // rescanning agent_messages on a polled route.
+    await this.state.storage.put(CONTEXT_TOKENS_KEY, tokens);
+    return messages;
+  }
+
+  /**
+   * Everything `history()` needs, plus the intermediates compaction
+   * needs: the live rows with their seqs, and the token estimate of
+   * what would actually be sent.
+   */
+  private async buildHistory(): Promise<{
+    messages: Message[];
+    /** Live messages, image-hydrated and tier-1 bounded — the exact
+     *  array the compaction planner measures and cuts. */
+    live: Message[];
+    /** `agent_messages.seq` for each entry of `live`, same order. */
+    liveSeqs: number[];
+    /** Tokens for the parts a cut cannot reclaim (seed + summary). */
+    fixedTokens: number;
+    tokens: number;
+    summary: ContextSummary | null;
+  }> {
     const prompt = (await this.state.storage.get<string>('seedPrompt')) ?? '';
     const seedMsg: UserMessage = { role: 'user', content: prompt, timestamp: 0 };
-    const stored = this.state.storage.sql
-      .exec(`SELECT message_json FROM agent_messages ORDER BY seq`)
-      .toArray()
-      .map((r) => JSON.parse(String(r.message_json)) as StoredMessage);
+    const summary =
+      (await this.state.storage.get<ContextSummary>(CONTEXT_SUMMARY_KEY)) ?? null;
+    const head: Message[] = summary ? [seedMsg, summaryMessage(summary)] : [seedMsg];
+
+    // Rows at or below `throughSeq` have been compacted into the
+    // summary. They stay in the table — the transcript is the user's
+    // record and `scripts/session-doctor.mjs` reads these — they are
+    // just no longer part of what the model is shown.
+    const rows = this.state.storage.sql
+      .exec(
+        `SELECT seq, message_json FROM agent_messages WHERE seq > ? ORDER BY seq`,
+        summary?.throughSeq ?? 0,
+      )
+      .toArray();
+    const liveSeqs = rows.map((r) => Number(r.seq));
+    const stored = rows.map((r) => JSON.parse(String(r.message_json)) as StoredMessage);
 
     // Which image-bearing messages stay pictorial: the newest few.
     const withImages = stored
@@ -906,7 +994,124 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
         timestamp: msg.timestamp ?? 0,
       } as UserMessage;
     });
-    return [seedMsg, ...hydrated];
+
+    // Tier 1, applied on every read and persisted nowhere: older, large
+    // tool results degrade to a marker. Widening the budget later
+    // brings the full results straight back, because the rows were
+    // never changed.
+    const cfg = resolveContextConfig(this.env);
+    const live = boundToolResults(hydrated, cfg);
+    const fixedTokens = estimateTokens(head);
+    return {
+      messages: [...head, ...live],
+      live,
+      liveSeqs,
+      fixedTokens,
+      tokens: fixedTokens + estimateTokens(live),
+      summary,
+    };
+  }
+
+  /**
+   * Tier 2: summarize the oldest span of model history away.
+   *
+   * Runs as its OWN alarm step rather than inside a turn — a summarizer
+   * call inside the turn it protects would add its latency to the same
+   * ~300s handler budget, and blowing that kills the celld process
+   * rather than just this isolate. The caller reschedules and the real
+   * turn runs next, on the smaller history.
+   *
+   * Returns true when it compacted, i.e. when the caller should
+   * reschedule instead of running a turn. Never throws: a failing
+   * summarizer falls back to a mechanical digest and the cut happens
+   * anyway. Turning a cost problem into a stuck session would be a
+   * worse outcome than a poor summary.
+   */
+  private async compact(llm: LlmConfig, options: { force?: boolean } = {}): Promise<boolean> {
+    const cfg = resolveContextConfig(this.env);
+    if (!cfg.enabled) return false;
+    const { live, liveSeqs, fixedTokens, summary } = await this.buildHistory();
+    const plan = planCompaction({ live, fixedTokens, cfg, force: options.force });
+    if (!plan) return false;
+
+    const span = live.slice(0, plan.cutIndex);
+    const throughSeq = liveSeqs[plan.cutIndex - 1];
+    const summarized = await summarizeSpan({
+      span,
+      previousSummary: summary?.text,
+      // Same endpoint and model as the turn, with a much smaller output
+      // budget: latency tracks output tokens, so a summarizer told to
+      // write at length is the one part of this that could push a step
+      // past its own ceiling.
+      model: turnModel({ ...llm, maxTokens: SUMMARY_MAX_TOKENS }),
+      apiKey: llm.apiKey,
+      // The same test seam runRealTurn uses, so a test can drive
+      // compaction without a network.
+      streamFn: opts?.streamFn ?? defaultStreamFn,
+      signal: this.turnAbort?.signal,
+    });
+    const next = foldSummary({
+      previous: summary,
+      text: summarized ?? mechanicalSummary(span),
+      newQuotes: userQuotesOf(span),
+      throughSeq,
+      now: Date.now(),
+    });
+    await this.state.storage.put(CONTEXT_SUMMARY_KEY, next);
+    await this.state.storage.put(CONTEXT_TOKENS_KEY, plan.afterTokens);
+    this.append({
+      kind: 'notification',
+      turnId: 'system',
+      content:
+        `Compacted the earlier part of this conversation to stay inside the model's ` +
+        `context window (about ${kTokens(plan.beforeTokens)} → ${kTokens(plan.afterTokens)} tokens` +
+        `${summarized ? '' : ', without a summarizer'}). Your own messages are kept ` +
+        `verbatim; older tool output is not, so the agent may re-read files it has ` +
+        `already seen. The full transcript above is unchanged.`,
+    });
+    return true;
+  }
+
+  /**
+   * Handle a turn whose model answered with nothing usable: compact,
+   * then run the turn again. Returns true when a retry was scheduled
+   * and the caller should stop.
+   *
+   * Ordered compact-then-retry, not retry-then-compact, because when
+   * the cause IS the context, an immediate retry on the same history is
+   * a second expensive way to fail. When it isn't, compaction declines
+   * to do anything (its planner returns null below the minimum worth
+   * reclaiming) and this is a plain retry.
+   *
+   * The retry does NOT advance the turn counter: a turn that produced
+   * nothing should not spend the user's per-message step budget.
+   */
+  private async retryUnusable(llm: LlmConfig, reason: string): Promise<boolean> {
+    const strikes = Number(await this.state.storage.get<number>(UNUSABLE_RETRY_KEY)) || 0;
+    if (strikes >= MAX_UNUSABLE_RETRIES) return false;
+    await this.state.storage.put(UNUSABLE_RETRY_KEY, strikes + 1);
+    const compacted = await this.compact(llm, { force: true });
+    if (this.cancelRequested) return true;
+    this.append({
+      kind: 'notification',
+      turnId: 'system',
+      content: `${reason} Retrying${compacted ? ' on the compacted history' : ''}.`,
+    });
+    await this.state.storage.setAlarm(Date.now() + TURN_DELAY_MS);
+    return true;
+  }
+
+  /** Add the session's measured size to a failure message. The whole
+   *  point of this class of error is that it used to say nothing at
+   *  all; "how big is this conversation" is the first question anyone
+   *  asks next. */
+  private async explainFailure(message: string): Promise<string> {
+    const tokens = Number(await this.state.storage.get<number>(CONTEXT_TOKENS_KEY)) || 0;
+    if (tokens <= 0) return message;
+    return (
+      `${message} The conversation is about ${kTokens(tokens)} tokens. ` +
+      `Ask again, or start a new session if it keeps happening.`
+    );
   }
 
   private async commitLifecycle(
@@ -1055,6 +1260,19 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
         // ── real mode: one pi turn per alarm ──
         if (interactive) await this.ensureSeededInteractive();
         else await this.ensureSeeded(trigger!);
+        // Compaction is its own alarm step, taken before the turn that
+        // benefits from it and charged to no one's turn budget: the
+        // session was going to spend this history anyway, and folding a
+        // summarizer call into the same handler as a model turn is how
+        // you find the 300s budget the hard way.
+        this.turnAbort = new AbortController();
+        if (await this.compact(llm)) {
+          // A /cancel that interleaved with the summarizer call owns the
+          // terminal state; don't reschedule over it.
+          if (this.cancelRequested) return;
+          await this.state.storage.setAlarm(Date.now() + TURN_DELAY_MS);
+          return;
+        }
         const domain = payload.createTools(
           this.env,
           this.state.storage.sql as unknown as Parameters<typeof payload.createTools>[1],
@@ -1084,7 +1302,6 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
           };
           tools = [...domain.definitions, ...CODE_TOOL_DEFINITIONS];
         }
-        this.turnAbort = new AbortController();
         const result = await runRealTurn({
           llm,
           history: await this.history(),
@@ -1106,12 +1323,17 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
           );
         }
         if (result.errorMessage) {
-          this.append({ kind: 'error', message: result.errorMessage });
+          if (result.unusable && (await this.retryUnusable(llm, result.errorMessage))) return;
+          this.append({ kind: 'error', message: await this.explainFailure(result.errorMessage) });
+          await this.state.storage.delete(UNUSABLE_RETRY_KEY);
           // Interactive: park so the user can retry; autonomous: fail.
           if (interactive) await this.parkIdle();
           else await this.failRun(result.errorMessage);
           return;
         }
+        // A turn that answered clears the strike — the next unusable
+        // reply is a fresh problem and gets its own retry.
+        await this.state.storage.delete(UNUSABLE_RETRY_KEY);
         done = result.done;
         conclusion = result.conclusion;
         if (done) this.append({ kind: 'done', reason: 'complete' });

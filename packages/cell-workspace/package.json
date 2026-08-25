@@ -1,6 +1,6 @@
 {
   "name": "@criblio/cell-workspace",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "Source-code workspace for cells (server-side agents on celld): lazy tarball checkout into Durable Object SQLite plus the read-only code tools over it. Worker-native \u2014 no filesystem, no subprocess.",
   "main": "./dist/index.js",
@@ -8,7 +8,7 @@
     ".": "./dist/index.js"
   },
   "dependencies": {
-    "@criblio/agent-protocol": "^0.2.0"
+    "@criblio/agent-protocol": "^0.3.0"
   },
   "peerDependencies": {
     "@criblio/app-utils": "*"
