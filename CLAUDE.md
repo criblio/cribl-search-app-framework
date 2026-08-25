@@ -282,6 +282,19 @@ When making framework changes:
 4. Run `npm test && npm run typecheck` inside `packages/app-utils/`;
    consumers run their own lint + build as an integration gate.
 
+**A version bump takes TWO PRs, and the second one is the skeleton.**
+The `skeleton` CI job scaffolds the template and `npm install`s from
+GitHub Packages, so `skeleton/package.json` may only name a version that
+is already **published** — and publishing happens on the master push,
+after the bump merges. Raising `@criblio/app-utils` to `^0.8.0` in the
+same PR that sets `version: 0.8.0` fails that job with
+`ETARGET notarget No matching version found`, which reads like a broken
+change and is only an ordering problem. So: bump the package version and
+the sibling *devDependency* ranges (those resolve through the workspace,
+not the registry) in the first PR; move the skeleton range in a
+follow-up once the publish lands. The gate arrived in #44, one PR after
+the last bump, so #46 was the first to meet it.
+
 ## Conventions
 
 - Keep exports composable. UI primitives should not pull in
