@@ -182,4 +182,21 @@ export interface SessionStatusResponse {
   seed?: SessionSeed | null;
   conclusion: unknown | null;
   latestSeq: number;
+  /**
+   * Estimated prompt tokens the model was handed on the last turn, and
+   * the window it was measured against. Optional because a session that
+   * has never run a turn has no estimate, and because a cell on an
+   * older harness doesn't report it at all.
+   *
+   * Read from a stored value rather than recomputed: this route is
+   * polled every few seconds and the estimate costs a full scan of the
+   * message table. A proxy (≈4 chars per token, images charged flat),
+   * not an accounting.
+   */
+  contextTokens?: number | null;
+  contextWindow?: number;
+  /** How many times this session has compacted its model history. Zero
+   *  is meaningfully different from absent: zero means the cell supports
+   *  compaction and has not needed it. */
+  compactions?: number;
 }
