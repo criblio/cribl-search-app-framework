@@ -74,6 +74,17 @@ export interface SeedResult {
 export interface InteractiveInput {
   prompt: string;
   context?: { service?: string; earliest?: string; latest?: string } | null;
+  /**
+   * The `payload` field of the originating `CreateSessionBody`, carried
+   * through verbatim — the harness never reads it. Null when the caller
+   * sent none, which is every caller that predates the field.
+   *
+   * This is the only per-session input a payload can add: the
+   * coordinator persists only the fields it names and the pump forwards
+   * only the fields it names, so anything else on the create body dies
+   * twice before it reaches here.
+   */
+  payload?: unknown;
 }
 
 /** A durable lifecycle record request (APM: the dataset commit that

@@ -250,3 +250,26 @@ dominating at that scale, but it does not prove prefill stays cheap at
 1M — and TTFT is what `TURN_TIMEOUT_MS` (180s) actually races. Note also
 that a shared provider pool returned upstream `429`s at 205k; a 1M-token
 turn is a much larger unit of work to have rejected and retried.
+
+## A per-session model does not move the window
+
+`CreateSessionBody.llm` lets one session run a different `model` and
+`maxTokens` (stored as the `llm_override` column, applied in
+`llmConfig()`). It deliberately does **not** carry `contextWindow`, and
+that asymmetry is the thing to know before using it.
+
+Every threshold in this document derives from `resolveContextConfig(env)`
+— `compactAtTokens`, `compactTargetTokens`, `toolResultBudgetChars` — and
+those are read on paths that have no session in hand. So a per-session
+window would be honoured by the turn and ignored by compaction: the
+session would declare 1M to pi-ai while still being compacted at 70% of
+the cell's 200k, which is the confusing half of both behaviours.
+
+The consequence for a caller: **pick a per-session model whose real
+window is not smaller than the cell's `LLM_CONTEXT_WINDOW`.** A profile
+that switches to a 32k model on a 200k cell gets compaction that fires
+far too late, and the provider — not the harness — is what refuses. If
+mixed windows become a real requirement, the fix is to thread the config
+object rather than the env through `history()`/`compact()`/`buildHistory()`
+and store the whole `ContextConfig` per session; the per-session model is
+not a reason to do that on its own.

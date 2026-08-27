@@ -39,6 +39,7 @@ import {
   isTerminalStatus,
   titleFromPrompt,
   type CreateSessionBody,
+  type SessionLlmOverride,
   type SessionMode,
   type SessionStatus,
   type ServerFrame,
@@ -359,9 +360,13 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
     // `turn_budget` is the absolute turn index at which the current
     // user-message batch must stop — reset on every /messages so the
     // MAX_TURNS cap applies per message, not per whole conversation.
+    // `llm_override` is the create body's `llm` field as JSON, or NULL
+    // for env defaults. A column rather than a storage key because
+    // llmConfig() is synchronous and on the turn path.
     this.addColumn('mode', `TEXT NOT NULL DEFAULT 'autonomous'`);
     this.addColumn('title', 'TEXT');
     this.addColumn('turn_budget', 'INTEGER');
+    this.addColumn('llm_override', 'TEXT');
   }
 
   private addColumn(name: string, decl: string): void {
@@ -388,7 +393,7 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
       .exec(
         `SELECT id, alert_id, trigger_event_id, incident_key, status,
                 error, created_at, started_at, concluded_at, turn, schema_version,
-                mode, title, turn_budget
+                mode, title, turn_budget, llm_override
          FROM investigation LIMIT 1`,
       )
       .toArray();
@@ -523,21 +528,23 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
       this.state.storage.sql.exec(
         `INSERT INTO investigation
            (id, alert_id, trigger_event_id, incident_key, status, seed_json,
-            created_at, schema_version, mode, title, turn_budget)
-         VALUES (?, '', ?, 'interactive', 'queued', 'null', ?, ?, 'interactive', ?, ?)`,
+            created_at, schema_version, mode, title, turn_budget, llm_override)
+         VALUES (?, '', ?, 'interactive', 'queued', 'null', ?, ?, 'interactive', ?, ?, ?)`,
         body.id,
         body.id,
         Date.now(),
         SCHEMA_VERSION,
         title,
         turnBudgetOf(this.env),
+        body.llm ? JSON.stringify(body.llm) : null,
       );
-      // The opening prompt + context; consumed once by
-      // ensureSeededInteractive() on the first alarm.
+      // The opening prompt + context + the payload's own blob; consumed
+      // once by ensureSeededInteractive() on the first alarm.
       await this.state.storage.put('interactivePayload', {
         prompt,
         context: body.context ?? null,
         repos: body.repos ?? null,
+        payload: body.payload ?? null,
       });
       this.setStatus('running', { started_at: Date.now() });
       await this.state.storage.setAlarm(Date.now() + TURN_DELAY_MS);
@@ -769,14 +776,45 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
   private llmConfig(): LlmConfig | null {
     if (!this.env.LLM_BASE_URL) return null;
     const cfg = resolveContextConfig(this.env);
+    const over = this.llmOverride();
     return {
       baseUrl: this.env.LLM_BASE_URL,
       apiKey: this.env.LLM_API_KEY ?? '',
-      model: this.env.LLM_MODEL ?? 'gpt-4.1',
+      model: over.model ?? this.env.LLM_MODEL ?? 'gpt-4.1',
       vision: this.env.LLM_VISION === 'true',
       contextWindow: cfg.contextWindow,
-      maxTokens: cfg.maxTokens,
+      maxTokens: over.maxTokens ?? cfg.maxTokens,
     };
+  }
+
+  /**
+   * This session's `llm` overrides, from the create body. Only `model`
+   * and `maxTokens` are overridable — both are read exclusively through
+   * llmConfig(), so honouring them here is the whole of it.
+   *
+   * `contextWindow` is not: it also derives the compaction thresholds
+   * (resolveContextConfig, read on paths with no session in hand), so a
+   * per-session value would be obeyed by the turn and ignored by
+   * compaction. Endpoint, key and vision stay cell-wide because they're
+   * deployment facts, not session preferences.
+   */
+  private llmOverride(): SessionLlmOverride {
+    const raw = this.row()?.llm_override;
+    if (typeof raw !== 'string' || !raw) return {};
+    try {
+      const parsed = JSON.parse(raw) as SessionLlmOverride;
+      return {
+        model: typeof parsed?.model === 'string' && parsed.model ? parsed.model : undefined,
+        maxTokens:
+          typeof parsed?.maxTokens === 'number' && parsed.maxTokens > 0
+            ? Math.floor(parsed.maxTokens)
+            : undefined,
+      };
+    } catch {
+      // A malformed override is a config mistake, not a reason to
+      // refuse the turn — fall back to the cell's env.
+      return {};
+    }
   }
 
   /** Server-only code-tools guidance appended to the seed prompt when
@@ -846,10 +884,15 @@ export function makeSessionDO<TTrigger, TEnv extends CellEnv>(
       prompt: string;
       context?: { service?: string; earliest?: string; latest?: string } | null;
       repos?: RepoConfig[] | null;
+      payload?: unknown;
     }>('interactivePayload');
 
     const { prompt: base, seed } = await payload.buildInteractiveSeed(
-      { prompt: stored?.prompt ?? '', context: stored?.context ?? null },
+      {
+        prompt: stored?.prompt ?? '',
+        context: stored?.context ?? null,
+        payload: stored?.payload ?? null,
+      },
       this.env,
     );
     const seedPrompt = base + this.codeAddendum(this.effectiveRepos(stored?.repos));
