@@ -122,6 +122,40 @@ export interface CreateSessionBody {
   /** Repos the agent may check out (from app Settings). Falls back to
    *  the cell's REPOS_JSON env when absent. */
   repos?: SourceRepo[];
+  /**
+   * Opaque, payload-defined blob carried verbatim from this call to
+   * `buildInteractiveSeed`'s `InteractiveInput.payload`.
+   *
+   * The harness never reads it. It exists because every other field on
+   * this body is dropped twice on the way in — the coordinator persists
+   * only what it names, and the pump forwards only what it names — so a
+   * payload that needs its own per-session input (an agent profile, a
+   * tool allow-list, a skill set) had nowhere to put it and no clean
+   * place to smuggle it.
+   *
+   * Keep it small: it round-trips through the coordinator's
+   * `alert_json` column and the session DO's storage, both of which are
+   * read on hot paths. Anything large belongs in the payload's own
+   * durable state, keyed by whatever id this blob carries.
+   */
+  payload?: unknown;
+  /**
+   * Per-session LLM overrides. Absent fields fall back to the cell's
+   * env (`LLM_MODEL`, `LLM_MAX_TOKENS`), which stays the default for
+   * every session that doesn't ask for something else.
+   *
+   * `contextWindow` is deliberately NOT overridable here: it also
+   * derives the compaction thresholds, which are read from env on
+   * paths that have no session in hand, so a per-session value would
+   * be honoured in one place and ignored in the other.
+   */
+  llm?: SessionLlmOverride;
+}
+
+/** The overridable subset of a session's LLM config. */
+export interface SessionLlmOverride {
+  model?: string;
+  maxTokens?: number;
 }
 
 /** Derive a short recall-panel title from a free-form prompt. */

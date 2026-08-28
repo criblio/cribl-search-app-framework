@@ -116,7 +116,16 @@ export function makeCoordinatorDO<TTrigger, TEnv extends CellEnv>(
         id,
         eventId,
         incidentKeyVal,
-        JSON.stringify({ prompt, context: body.context ?? null, repos: body.repos ?? null }),
+        // Every field named here and nowhere else is a field the
+        // payload can never see — this object IS the interactive
+        // create body as far as the rest of the run is concerned.
+        JSON.stringify({
+          prompt,
+          context: body.context ?? null,
+          repos: body.repos ?? null,
+          payload: body.payload ?? null,
+          llm: body.llm ?? null,
+        }),
         Date.now(),
         title,
       );
@@ -395,20 +404,26 @@ export function makeCoordinatorDO<TTrigger, TEnv extends CellEnv>(
     const stub = this.env.INVESTIGATION.get(this.env.INVESTIGATION.idFromName(id));
     // Autonomous → /start with the raw trigger facts (the DO seeds
     // via payload.buildSeed). Interactive → /create with the user's
-    // prompt + context + repos.
+    // prompt + context + repos + the payload's own blob.
     const res =
       mode === 'interactive'
         ? await (() => {
-            const payload = JSON.parse(String(next.alert_json)) as CreateSessionBody;
+            const body = JSON.parse(String(next.alert_json)) as CreateSessionBody;
             return stub.fetch('https://investigation.internal/create', {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
+              // This is the second place an unnamed field is dropped.
+              // Adding one to CreateSessionBody means adding it HERE as
+              // well as to the INSERT above, or it arrives as undefined
+              // with nothing to say so.
               body: JSON.stringify({
                 id,
-                prompt: payload.prompt,
-                context: payload.context ?? null,
+                prompt: body.prompt,
+                context: body.context ?? null,
                 title: String(next.title ?? ''),
-                repos: payload.repos ?? null,
+                repos: body.repos ?? null,
+                payload: body.payload ?? null,
+                llm: body.llm ?? null,
               }),
             });
           })()
