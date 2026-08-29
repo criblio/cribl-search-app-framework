@@ -19,13 +19,16 @@ inside the Cribl Search sandboxed iframe).
 
 1. Copy the `skeleton/` directory to a new repo.
 2. Find-replace `APPNAME` with your app name in `package.json`.
-3. Run `npm install`. The `@criblio` packages come from GitHub
-   Packages, which requires auth even for public reads, so export a
-   token first: `export NODE_AUTH_TOKEN=$(gh auth token)`. The
-   skeleton's `.npmrc` wires the scope to that registry; without the
-   token npm falls through to npmjs and reports a bare 404 rather
-   than an auth failure. In CI, `${{ github.token }}` plus
-   `permissions: packages: read` is enough.
+3. Run `npm install`. Nothing else — the `@criblio` packages are on
+   npmjs, publicly, so there is no `.npmrc`, no token, and no scope
+   routing. Don't reintroduce any of it: the skeleton's dependency
+   ranges have to be resolvable by a plain public `npm install`,
+   because **an app GoatTown generates never runs npm at all** — its
+   `build_app` rewrites each bare import to
+   `https://esm.sh/<name>@<range>`, and esm.sh mirrors npmjs only.
+   Any range the skeleton pins that npmjs cannot satisfy is a 404 at
+   bundle time, and `npm install` here will not tell you
+   (see "Version ranges" below).
 4. Copy `.env.example` to `.env` and fill in your Cribl Cloud
    credentials.
 5. Optional: `scripts/cribl-mcp.sh start` to run the Cribl MCP
@@ -49,6 +52,26 @@ Read the docs that ship in the skeleton:
   search patterns, UI patterns.
 
 ## Packages
+
+### Version ranges: a caret on a 0.x is narrower than it looks
+
+Every package here is pre-1.0, and for a `0.x` version npm reads
+`^0.7.0` as `>=0.7.0 <0.8.0` — it does **not** admit 0.8.0. So
+bumping a package's `version` silently strands every range that
+names the previous minor, and the skeleton is the one that matters:
+it pinned `@criblio/app-utils@^0.7.0` while the package shipped
+0.8.0, so `https://esm.sh/@criblio/app-utils@^0.7.0` is a 404 and
+every app GoatTown generates from the skeleton fails to bundle.
+
+CI could not see it, and the reason will outlive this instance:
+GitHub Packages still holds 0.5.0 through 0.8.0, so the scaffold job
+resolved `^0.7.0` against 0.7.0 there and went green, while npmjs —
+which starts at whatever the first publish was — has only 0.8.0. Any
+registry that has been published to for longer satisfies ranges the
+new one cannot, so a stale range is green here and 404 for a
+consumer. When you bump a package's minor, grep `skeleton/` and the
+docs for the old range in the same commit; an app generated before
+that bump has its own pin to raise.
 
 ### @cribl/app-utils
 
