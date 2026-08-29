@@ -313,6 +313,13 @@ the last bump, so #46 was the first to meet it.
 
 ## Conventions
 
+- Everything here is **Apache-2.0**. A new package needs the
+  `license` field *and* a copy of the root `LICENSE` in its own
+  directory — `npm run check:publish-config` fails on either, because
+  npm itself warns about neither and a published version is
+  immutable. `app-utils@0.8.0`, `agent-protocol@0.4.0` and
+  `cell-workspace@0.1.3` shipped with no license field and cannot be
+  fixed; they can only be superseded.
 - Keep exports composable. UI primitives should not pull in
   routing-aware code — `<Banner>` accepts a `children` slot for
   the action so apps plug their own `<Link>` in. This keeps
