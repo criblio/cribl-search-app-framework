@@ -214,32 +214,25 @@ person deciding.
 - `<ResilienceBoundary>` — router-free root/panel render containment
   with retry and an optional app-owned fallback renderer
 
-### @criblio/cell-harness
+### The cell harness is no longer here
 
-**A long session used to die silently, and nothing bounded its history.**
-Both are fixed; the policy and how to reverse it are in
-`packages/cell-harness/CONTEXT.md`, which is the file to read before
-touching `compaction.ts`, `history()`, or the turn runner's terminal
-conditions. Three facts worth carrying without reading it:
+`@criblio/cell-harness` moved to **`criblio/goattown`** (`cell/src/harness/`)
+on 2026-08-29 and this repo no longer builds or publishes it. Read
+`cell/src/harness/CONTEXT.md` there before touching compaction, `history()`,
+or the turn runner's terminal conditions.
 
-- **An empty assistant message is a failure, not an answer.** `done` is
-  computed from "no tool calls", so an empty reply used to be
-  indistinguishable from "the model is finished" — the session appended
-  `done` and parked at `idle` reporting success, with no error frame.
-  `classifyReply()` names that case (and `finish_reason: length` with
-  nothing in it); both take the failed-turn path, are not persisted, and
-  get one compact-then-retry before failing out loud.
-- **Compaction is a separate alarm step, never part of a turn.** A
-  summarizer call inside the turn it protects adds its latency to the
-  same ~300s handler budget, and blowing that kills the celld *process*.
-  If the summarizer fails, the cut happens anyway with a mechanical
-  digest — an outage there must not park a session.
-- **`contextWindow` is inert.** pi-agent-core never reads it (its own
-  default is 0), so it clamps nothing; a 205k-token prompt was measured
-  going out and being served. Its real job is being the number every
-  compaction threshold derives from, which is what makes "use the
-  model's bigger window" a config change (`LLM_CONTEXT_WINDOW`) rather
-  than a code change. Raising it alone buys nothing.
+Why, so nobody re-extracts it out of tidiness: the sharing had stopped being
+real. APM's cell is ~770 lines pinned at `^0.1.1`; GoatTown's payload is ~14k
+on `^0.6.0`; and nothing inside this repo ever imported the harness, so there
+was no third consumer to serve. **Removal cannot break APM** — a `0.x` caret
+never resolves out of `0.1.x`, and npm does not unpublish, so every version
+APM can resolve still exists on GitHub Packages forever.
+
+What stays here is the line worth keeping: `app-utils` is the Cribl *domain*
+layer every app wants the same behavior from, `agent-protocol` is the contract
+an app uses to register agents with GoatTown (more valuable now, not less), and
+`cell-workspace` is genuinely generic. The harness was the one piece where
+"shared" meant "shared with a single cell that never upgrades".
 
 ### @cribl/app-tooling
 
