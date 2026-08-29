@@ -46,6 +46,8 @@ import {
   isWriteMethod,
   matchOperation,
   searchOperations,
+  searchTerms,
+  unmatchedTerms,
   type OpenApiDigest,
 } from './openapi-digest.js';
 
@@ -174,7 +176,7 @@ export function criblApiDefinition(opts: { contextGuide?: string } = {}): AgentT
     id: 'cribl_api',
     description:
       'Discover and call the Cribl REST API. Use it to check how an API really behaves before writing app code against it.\n' +
-      "action='search': find endpoints by free text (e.g. \"create search job\", \"saved queries\", \"apps\"). Start here — do not guess paths.\n" +
+      "action='search': find endpoints by free text (e.g. \"create search job\", \"saved queries\", \"apps\"). Start here — do not guess paths. Name the resource in as few words as possible; a long description of what you want from it ranks worse than the one word for the thing itself.\n" +
       "action='describe': get one endpoint's parameters and request-body schema. method+path required.\n" +
       "action='call': execute a request. GET runs immediately. Any write (POST/PUT/PATCH/DELETE) is NOT executed on the first call: you get an approvalId, you must STOP and let the user approve it, and only then retry the identical call with that approvalId. Changing the method, path, or body invalidates an approval — ask again." +
       guide,
@@ -255,16 +257,40 @@ export function createCriblApiTool(
         writes: args.writesOnly === true ? true : undefined,
         limit: args.limit,
       });
+      const terms = searchTerms(query);
       if (hits.length === 0) {
+        // Empty now means one of two different things, and telling them
+        // apart is the difference between "reword it" and "drop the
+        // filter". Nothing matched at all only happens when every word
+        // is absent from the whole spec, so name those words: a model
+        // that wrote nine adjectives cannot otherwise tell which one
+        // sank the search.
+        const dead = unmatchedTerms(deps.digest, query);
+        const filtered = args.method || args.writesOnly === true;
+        const why =
+          dead.length === terms.length
+            ? `None of these words appear in any endpoint's path, id, tag or summary: ${dead.join(', ')}.`
+            : filtered
+              ? `Words that do appear in the spec matched no ${args.writesOnly === true ? 'writing ' : ''}${args.method ? `${args.method.toUpperCase()} ` : ''}endpoint — drop the filter and search again.`
+              : 'No endpoint matched any of them.';
         return fail(
           call,
-          `No Cribl API endpoints matched ${JSON.stringify(query)}. Every search term has to appear somewhere in the endpoint — try fewer or broader words (a resource name like "dataset", "app", "pipeline" works best).`,
+          `No Cribl API endpoints matched ${JSON.stringify(query)}. ${why} Search with the resource name alone ("metrics", "dataset", "app", "pipeline") rather than a description of what you want from it — or use action='describe' with a method+path if you already have one in mind.`,
           { kind: 'criblApi', action, error: 'no matches' },
         );
       }
+      // Which of the user's words no returned endpoint matched. Empty
+      // for an exact (every-term) match; non-empty means the search fell
+      // back to partial matching and this list is what was effectively
+      // ignored. Saying so keeps a loose list from reading as a precise
+      // one — the model should either narrow or describe a candidate.
+      const covered = new Set(hits.flatMap((h) => h.terms));
+      const ignored = terms.filter((t) => !covered.has(t));
       const lines = hits.map((h) => formatOpLine(h.op));
       const content = [
-        `${hits.length} endpoint${hits.length === 1 ? '' : 's'} matching ${JSON.stringify(query)} (Cribl ${deps.digest.specVersion}):`,
+        ignored.length === 0
+          ? `${hits.length} endpoint${hits.length === 1 ? '' : 's'} matching ${JSON.stringify(query)} (Cribl ${deps.digest.specVersion}):`
+          : `No endpoint matches all of ${JSON.stringify(query)}, so these ${hits.length} are the closest partial matches (Cribl ${deps.digest.specVersion}) — ignoring: ${ignored.join(', ')}:`,
         ...lines,
         '',
         "Use action='describe' with a method+path for parameters and the request-body schema.",
