@@ -1,6 +1,7 @@
 {
   "name": "@criblio/cell-workspace",
-  "version": "0.1.3",
+  "version": "0.1.4",
+  "license": "Apache-2.0",
   "type": "module",
   "description": "Source-code workspace for cells (server-side agents on celld): lazy tarball checkout into Durable Object SQLite plus the read-only code tools over it. Worker-native — no filesystem, no subprocess.",
   "main": "./dist/index.js",

@@ -20,11 +20,19 @@
  * `access: public` is checked for the same class of reason. A scoped package
  * defaults to a *private* publish, which fails on the FIRST release of a new
  * package and only then — long after review.
+ *
+ * `license` is checked because npm does NOT warn about its absence, and the
+ * consequence is not recoverable: a published version is immutable, so a
+ * package that ships without the field reads as "all rights reserved" to
+ * every consumer of that exact version, forever. Three of these four went
+ * out that way on the first npmjs release before anyone noticed. A later
+ * patch bump fixes the next version and nothing before it.
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const WANT_REGISTRY = 'https://registry.npmjs.org';
+const WANT_LICENSE = 'Apache-2.0';
 const PACKAGES = 'packages';
 
 const problems = [];
@@ -53,10 +61,27 @@ for (const dir of readdirSync(PACKAGES)) {
         `release and nowhere earlier.`,
     );
   }
+  if (pkg.license !== WANT_LICENSE) {
+    problems.push(
+      `${manifest}: license must be "${WANT_LICENSE}" (got ` +
+        `${pkg.license == null ? 'nothing' : `"${pkg.license}"`}). npm does ` +
+        `not warn, and a published version is immutable — shipping without ` +
+        `it means "all rights reserved" for that version permanently.`,
+    );
+  }
+  // The field is the machine-readable half; the text has to be in the
+  // tarball. npm includes a root LICENSE regardless of `files`, so the only
+  // way to get this wrong is to not have the file.
+  if (!existsSync(join(PACKAGES, dir, 'LICENSE'))) {
+    problems.push(`${join(PACKAGES, dir)}/LICENSE is missing (copy the root LICENSE).`);
+  }
 }
 
 if (problems.length) {
   console.error(`✗ publish config:\n  ${problems.join('\n  ')}`);
   process.exit(1);
 }
-console.log(`✓ publish config: every package targets ${WANT_REGISTRY} publicly`);
+console.log(
+  `✓ publish config: every package targets ${WANT_REGISTRY} publicly, ` +
+    `${WANT_LICENSE}, with LICENSE in the tarball`,
+);
