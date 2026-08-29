@@ -28,22 +28,32 @@ npm run dev
 
 ## Installing the packages
 
-All packages publish to **GitHub Packages** under the `@criblio` scope
-(public — any authenticated GitHub token can read them). Consumers need
-an `.npmrc` routing the scope plus a token:
+All packages publish to **npmjs** under the public `@criblio` scope, so
+consumers need nothing — no `.npmrc`, no token, no scope routing:
 
 ```
-@criblio:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+npm install @criblio/app-utils
 ```
 
-with `NODE_AUTH_TOKEN` set to a token that has `read:packages` (in CI:
-`${{ github.token }}`; locally a classic PAT, or try
-`export NODE_AUTH_TOKEN=$(gh auth token)`).
+They used to publish to GitHub Packages, which required a token even for
+public reads. The reason for moving is not convenience: **GoatTown's
+`build_app` has no install step at all.** It rewrites every bare import
+into an `https://esm.sh/<name>@<range>` URL inside a workerd isolate that
+has no filesystem and no npm, and esm.sh mirrors npmjs *only* — so a
+package on GitHub Packages simply does not exist to a generated app. That
+made the framework's own client unreachable from apps the framework
+scaffolds, silently: nothing in the skeleton imports `src/api/cribl.ts`,
+so tree-shaking dropped it and the build went green while the agent wrote
+its own Cribl client by hand.
+
+Versions already on GitHub Packages stay there permanently (npm does not
+unpublish), so existing consumers keep resolving. New versions go to npmjs.
 
 Publishing is automatic: the publish workflow runs on every master push
-and publishes any workspace package whose `version` isn't in the
-registry yet — bump a package's version to release it.
+and publishes any workspace package whose `version` isn't on npmjs yet —
+bump a package's version to release it. Releases carry npm
+[provenance](https://docs.npmjs.com/generating-provenance-statements),
+which this repo can attest because it is public and publishes from CI.
 
 ## Apps built on this framework
 
