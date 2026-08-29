@@ -1,9 +1,9 @@
 name: Publish packages
 
-# Publish any workspace package whose local version is not yet in the
-# GitHub Packages registry. Runs after every master push (a no-op when
-# every version already exists) and on demand. Bump a package's
-# `version` to release it — versions are immutable once published.
+# Publish any workspace package whose local version is not yet on npmjs.
+# Runs after every master push (a no-op when every version already exists)
+# and on demand. Bump a package's `version` to release it — versions are
+# immutable once published.
 on:
   push:
     branches: [master]
@@ -11,7 +11,10 @@ on:
 
 permissions:
   contents: read
-  packages: write
+  # For npm provenance. This repo is public and publishes from CI, which are
+  # npm's two conditions for attesting a build, so every release can carry a
+  # verifiable link back to the commit and workflow that produced it.
+  id-token: write
 
 jobs:
   publish:
@@ -23,25 +26,51 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: package-lock.json
-          registry-url: https://npm.pkg.github.com
+          registry-url: https://registry.npmjs.org
+      # No NODE_AUTH_TOKEN: every @criblio dependency in this repo is a
+      # workspace, so nothing here is fetched from a scoped registry. It was
+      # only ever needed because the scope was routed to GitHub Packages,
+      # which demands a token even for a public read.
       - run: npm ci
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # Dependency-ordered build so each package's prepack (which
       # rebuilds it) can resolve its siblings' d.ts output.
       - run: npm run build
+
+      # Fail on the CREDENTIAL before touching any package, and say which
+      # thing is wrong. Without this the first `npm publish` reports a bare
+      # 403/E404 that reads identically for four different causes — no token,
+      # a read-only token, a token for the wrong account, and "somebody else
+      # owns @criblio on npmjs" — and by then the loop has already published
+      # the packages that come earlier in the glob.
+      - name: Check the publish credential
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_TOKEN is not set. Create an npm granular access token" \
+                 "with read+write on the @criblio scope and add it as the NPM_TOKEN" \
+                 "repository secret."
+            exit 1
+          fi
+          if ! who=$(npm whoami --registry https://registry.npmjs.org 2>&1); then
+            echo "::error::NPM_TOKEN was rejected by npmjs: $who"
+            exit 1
+          fi
+          echo "Publishing to npmjs as: $who"
+
       - name: Publish missing versions
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           for dir in packages/*/; do
             name=$(node -p "require('./$dir/package.json').name")
             version=$(node -p "require('./$dir/package.json').version")
-            if npm view "$name@$version" version --registry https://npm.pkg.github.com >/dev/null 2>&1; then
+            if npm view "$name@$version" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
               echo "✓ $name@$version already published"
             else
               echo "▶ publishing $name@$version"
-              npm publish --workspace "$name"
+              npm publish --workspace "$name" --provenance
             fi
           done

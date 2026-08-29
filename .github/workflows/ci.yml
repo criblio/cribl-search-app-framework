@@ -29,6 +29,10 @@ jobs:
       - run: npm test --workspaces --if-present
       - run: npm run typecheck --workspaces --if-present
       - run: npm run audit --workspaces --if-present
+      # Guards the one rule a green build cannot see: a package published to
+      # the wrong registry installs fine here and 404s inside an app GoatTown
+      # generates, because esm.sh mirrors npmjs only.
+      - run: npm run check:publish-config
 
   # Prove a scaffolded app still builds. The skeleton is a template, not a
   # workspace, so nothing above touches it — and it silently rotted through

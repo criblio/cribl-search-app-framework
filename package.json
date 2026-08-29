@@ -1,7 +1,7 @@
 {
   "name": "cribl-search-app-framework",
   "private": true,
-  "description": "Cribl Search App framework monorepo \u2014 shared libraries published to GitHub Packages under @criblio",
+  "description": "Cribl Search App framework monorepo \u2014 shared libraries published to npm under @criblio",
   "workspaces": [
     "packages/*"
   ],
@@ -9,6 +9,7 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "build": "npm run build -w @criblio/agent-protocol && npm run build -w @criblio/app-utils && npm run build -w @criblio/cell-workspace"
+    "build": "npm run build -w @criblio/agent-protocol && npm run build -w @criblio/app-utils && npm run build -w @criblio/cell-workspace",
+    "check:publish-config": "node scripts/check-publish-registry.mjs"
   }
 }
