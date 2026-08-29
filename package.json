@@ -9,6 +9,6 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "build": "npm run build -w @criblio/agent-protocol && npm run build -w @criblio/app-utils && npm run build -w @criblio/cell-workspace && npm run build -w @criblio/cell-harness"
+    "build": "npm run build -w @criblio/agent-protocol && npm run build -w @criblio/app-utils && npm run build -w @criblio/cell-workspace"
   }
 }

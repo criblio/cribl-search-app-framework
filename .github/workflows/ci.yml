@@ -22,8 +22,9 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      # Build first, in dependency order (alphabetical workspace order
-      # builds cell-harness before the cell-workspace d.ts it imports).
+      # Build first: app-utils and cell-workspace both consume
+      # agent-protocol's emitted d.ts, so the root script fixes the order
+      # rather than trusting alphabetical workspace order.
       - run: npm run build
       - run: npm test --workspaces --if-present
       - run: npm run typecheck --workspaces --if-present
