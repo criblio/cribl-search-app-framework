@@ -6,7 +6,7 @@ inputs:
     required: false
     default: ''
   registry-token:
-    description: Token with packages:read for npm.pkg.github.com (registry mode; pass github.token). Public packages accept any GITHUB_TOKEN.
+    description: DEPRECATED. Only for an app generated before @criblio moved to npmjs, whose committed .npmrc still routes the scope to npm.pkg.github.com (pass github.token). A current app needs no credential and should omit this.
     required: false
     default: ''
 runs:
@@ -55,10 +55,14 @@ runs:
         NODE_AUTH_TOKEN: ${{ inputs.registry-token }}
       run: |
         set -euo pipefail
-        # Registry mode: the app's committed .npmrc routes the @criblio
-        # scope; append the (env-substituted) auth line here so npm can
-        # actually authenticate. Appended to the checkout only — never
-        # committed.
+        # A new app needs no credential at all: @criblio is on npmjs,
+        # publicly. This stays for the apps generated BEFORE that move,
+        # which have an .npmrc committed routing the scope to GitHub
+        # Packages — those versions are still there (npm does not
+        # unpublish), so an old app keeps building untouched. Appended to
+        # the checkout only, never committed, and a no-op when the input is
+        # empty. `registry-token` is deprecated: an app that has dropped
+        # its .npmrc should stop passing it.
         if [ -n "$NODE_AUTH_TOKEN" ]; then
           echo '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' >> .npmrc
         fi

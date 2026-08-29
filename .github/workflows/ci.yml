@@ -51,9 +51,15 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
+      # Deliberately NO credential of any kind. The scaffold has to install
+      # the way a stranger's checkout does — plain public npmjs, no .npmrc,
+      # no token — because that is the only way this job can catch a
+      # skeleton range npmjs cannot satisfy. With `${{ github.token }}` in
+      # the env it resolved `@criblio/app-utils@^0.7.0` against GitHub
+      # Packages, which holds 0.5.0–0.8.0 and so answered with 0.7.0; npmjs
+      # has only 0.8.0, and `^0.7.0` on a 0.x version excludes it. Green
+      # here, 404 for every app GoatTown generated.
       - name: Scaffold an app from the skeleton and build it
-        env:
-          NODE_AUTH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           cp -R skeleton "$RUNNER_TEMP/scaffolded"
@@ -65,3 +71,24 @@ jobs:
           npm run lint
           npx tsc --noEmit
           npm run build
+          # Then ask the PUBLIC registry to satisfy each runtime @criblio
+          # range on its own. `npm install` above can pass on a range npmjs
+          # cannot satisfy — a lockfile-less install reuses whatever a warm
+          # cache or a mirror offers — and a GoatTown-generated app has no
+          # install step at all: `build_app` rewrites each bare import to
+          # `https://esm.sh/<name>@<range>`, and esm.sh resolves that range
+          # against npmjs alone. Runtime deps only; a devDependency never
+          # reaches a bundle.
+          for name in $(node -p 'Object.keys(require("./package.json").dependencies||{}).filter(n=>n.startsWith("@criblio/")).join("\n")'); do
+            range=$(node -p "require('./package.json').dependencies['$name']")
+            # No pipe here on purpose: `if v=$(npm view … | tail -1)` tests
+            # tail's status, not npm's, so the guard passes on the very
+            # failure it exists to catch unless `pipefail` happens to be
+            # set. Verified in both directions before committing.
+            if v=$(npm view "$name@$range" version --registry https://registry.npmjs.org 2>/dev/null); then
+              echo "✓ $name@$range → $v"
+            else
+              echo "::error::$name@$range has no match on npmjs, so every app built from this skeleton 404s at bundle time. Note a caret on a 0.x version excludes the next minor — ^0.7.0 means >=0.7.0 <0.8.0."
+              exit 1
+            fi
+          done
