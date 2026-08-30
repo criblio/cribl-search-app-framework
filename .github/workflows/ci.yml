@@ -64,10 +64,16 @@ jobs:
           set -euo pipefail
           cp -R skeleton "$RUNNER_TEMP/scaffolded"
           cd "$RUNNER_TEMP/scaffolded"
-          # The skeleton ships no lockfile (a template can't pin what the
-          # app will resolve), so this is `npm install`, not `npm ci`.
+          # Mirror release-build's dependency sequence. First prove a new app
+          # can create its missing lock, then make that lock stale with the
+          # same kind of package.json edit GoatTown can make in its npm-less
+          # cell and prove the second resolution refreshes it.
           sed -i 's/APPNAME/scaffold-ci/g' package.json
-          npm install --no-audit --no-fund
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          npm pkg set 'dependencies.picocolors=^1.1.1'
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          test "$(node -p 'require("./package-lock.json").packages[""].dependencies.picocolors')" = '^1.1.1'
+          npm ci
           npm run lint
           npx tsc --noEmit
           npm run build

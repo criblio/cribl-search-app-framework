@@ -8,8 +8,6 @@ permissions:
   contents: write
   id-token: write
   attestations: write
-  # GitHub Packages requires auth even for public @criblio reads — see .npmrc.
-  packages: read
 
 jobs:
   release:
@@ -20,11 +18,9 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_REF_NAME#v}" = "$(node -p "require('./package.json').version")"
-      # Registry mode — see the note in ci.yml. The SHA pins the action,
+      # See the dependency-resolution note in ci.yml. The SHA pins the action,
       # not a framework source dependency.
-      - uses: criblio/cribl-search-app-framework/.github/actions/release-build@5c7659bbcbdd0a4ef366f4767bfee70cf5523251
-        with:
-          registry-token: ${{ github.token }}
+      - uses: criblio/cribl-search-app-framework/.github/actions/release-build@965a5fc5b64aac5da2ddca16105280209fdb1093
       - name: Upgrade validation workspace with exact candidate
         env:
           CRIBL_BASE_URL: ${{ secrets.CRIBL_RELEASE_VALIDATION_BASE_URL }}
