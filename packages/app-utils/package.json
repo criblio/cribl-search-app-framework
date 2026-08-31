@@ -1,6 +1,6 @@
 {
   "name": "@criblio/app-utils",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -37,6 +37,7 @@
     "./provisioning-banner": "./dist/ProvisioningBanner.js",
     "./styles/tokens.css": "./dist/styles/tokens.css",
     "./styles/base.css": "./dist/styles/base.css",
+    "./styles.css": "./dist/styles.css",
     "./graph": "./dist/graph/index.js"
   },
   "peerDependencies": {
@@ -84,7 +85,7 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
+    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.build.json && node scripts/compile-css-modules.mjs && node scripts/copy-assets.mjs && node scripts/check-css-build.mjs",
     "build:openapi-digest": "node scripts/build-openapi-digest.mjs",
     "prepack": "npm run build"
   },
