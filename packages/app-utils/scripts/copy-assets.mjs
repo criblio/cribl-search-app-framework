@@ -24,6 +24,10 @@ for (const entry of readdirSync(src, { recursive: true, withFileTypes: true })) 
   if (!entry.isFile()) continue;
   const ext = entry.name.slice(entry.name.lastIndexOf('.'));
   if (!ASSETS.has(ext)) continue;
+  // CSS Modules are compiled into stable class maps and ordinary CSS by
+  // compile-css-modules.mjs. Publishing the raw source beside them would make
+  // it too easy for a consumer to depend on the old bundler-specific path.
+  if (entry.name.endsWith('.module.css')) continue;
   // `parentPath` is absolute; keep the path relative to src so
   // src/styles/tokens.css lands at dist/styles/tokens.css.
   const from = join(entry.parentPath, entry.name);
