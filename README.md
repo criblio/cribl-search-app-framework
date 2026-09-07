@@ -4,6 +4,9 @@ Shared libraries and skeleton template for building Cribl Search Apps.
 
 See [CLAUDE.md](CLAUDE.md) for full documentation.
 
+For metric queries, result types and response compatibility, see
+[Metrics queries in apps](docs/metrics.md).
+
 ## Quick start
 
 ```bash

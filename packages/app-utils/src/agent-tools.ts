@@ -24,7 +24,7 @@
  */
 
 import { kqlInteger, kqlTime } from './kql.js';
-import { queryInstant, queryRange, METRICS_DATASET, type MetricsTransport } from './metrics.js';
+import { queryInstant, queryRange, METRICS_DATASET, MetricsQueryError, type MetricsTransport } from './metrics.js';
 import type { MetricsCatalog } from './metrics-catalog.js';
 
 export interface ToolCallInvocation {
@@ -501,10 +501,18 @@ export function createRunMetricsQueryTool(
       return { id: call.id, name: call.name, content: formatRowsForAgent(rows, 50), ui };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      const cancelled = signal?.aborted || (err instanceof Error && err.name === 'AbortError') ||
+        (err instanceof MetricsQueryError && err.code === 'cancelled');
+      const guidance = cancelled
+        ? 'The request was cancelled.'
+        : err instanceof MetricsQueryError && err.code === 'query-failed'
+          ? 'Cribl reported a failed query. Check its PromQL, metric names and labels.'
+          : 'This failure does not establish that the PromQL is invalid or that metrics are absent. ' +
+            'Inspect the request/response error before changing the query. Metrics returns inline results; do not create or poll Search jobs.';
       return {
         id: call.id,
         name: call.name,
-        content: `Metrics query failed: ${msg}. Check the PromQL and metric/label names, then retry.`,
+        content: `Metrics query failed: ${msg}. ${guidance}`,
         ui: { ...base, error: msg },
       };
     }
