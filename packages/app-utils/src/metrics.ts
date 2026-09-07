@@ -7,9 +7,13 @@
  * PromQL: bare selectors, label matchers (`{type="uap"}`), aggregations
  * with `by` clauses, `rate(m[5m])`, `topk(...)`, scalar arithmetic, etc.
  *
- * Response is NDJSON. The first line is a job summary:
+ * Response is NDJSON. The first line is a status snapshot:
  *   {"isFinished":true, "totalEventCount":N, "job":{"id":"mq-...","status":"completed"}}
- * Each following line is an event. For expression queries the events are
+ * Some Cribl builds send `isFinished:false` / `status:"running"` in that
+ * snapshot even when the complete response contains all its samples. This
+ * synchronous response is not a Search job to poll. Only an explicit failure
+ * or an invalid/incomplete body rejects it. Each following line is an event.
+ * For expression queries the events are
  *   {"_kind":"sample", <groupLabels...>, "_time":<epochSec>, "_value":<num>}
  * With `step` set you get a range query (one sample per step per series);
  * without it you get an instant query (single sample per series at `latest`).
@@ -82,6 +86,17 @@ export interface MetricSeries {
   points: Array<{ t: number; v: number }>;
 }
 
+/** Distinguishes a failed query from a broken response or cancellation. */
+export class MetricsQueryError extends Error {
+  constructor(
+    readonly code: 'query-failed' | 'invalid-response' | 'incomplete-response' | 'cancelled',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'MetricsQueryError';
+  }
+}
+
 export interface MetricMetadata {
   name: string;
   type: string;
@@ -133,18 +148,59 @@ export const defaultMetricsTransport: MetricsTransport = async (query, opts) => 
 };
 
 async function fetchRows(query: string, opts: MetricsQueryOptions = {}): Promise<RawRow[]> {
+  opts.signal?.throwIfAborted();
   const transport = opts.transport ?? defaultMetricsTransport;
   const text = await transport(query, opts);
+  opts.signal?.throwIfAborted();
   const lines = text.split('\n').filter((l) => l.trim() !== '');
-  if (lines.length === 0) return [];
-  const summary = JSON.parse(lines[0]) as {
-    isFinished?: boolean;
-    job?: { status?: string; id?: string };
-  };
-  if (summary.job?.status && summary.job.status !== 'completed') {
-    throw new Error(`metrics query job ${summary.job.id} status: ${summary.job.status}`);
+  if (lines.length === 0) {
+    throw new MetricsQueryError('invalid-response', 'Metrics endpoint returned an empty response');
   }
-  return lines.slice(1).map((l) => JSON.parse(l) as RawRow);
+  const parsed = lines.map((line, index): Record<string, unknown> => {
+    let value: unknown;
+    try { value = JSON.parse(line); } catch {
+      throw new MetricsQueryError('invalid-response', `Metrics response has invalid JSON at line ${index + 1}`);
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new MetricsQueryError('invalid-response', `Metrics response has a non-object at line ${index + 1}`);
+    }
+    return value as Record<string, unknown>;
+  });
+  const first = parsed[0];
+  // Older integrations can return event-only NDJSON. Do not drop its first row.
+  const hasSummary = typeof first._kind !== 'string';
+  const rows = hasSummary ? parsed.slice(1) : parsed;
+  if (hasSummary) {
+    const job = first.job as { status?: unknown; id?: unknown } | undefined;
+    const status = String(job?.status ?? '').toLowerCase();
+    if (['failed', 'error', 'canceled', 'cancelled'].includes(status)) {
+      throw new MetricsQueryError(
+        status === 'canceled' || status === 'cancelled' ? 'cancelled' : 'query-failed',
+        `Cribl metrics query ${String(job?.id ?? '(unknown id)')} ended with status: ${status}`,
+      );
+    }
+    if (!('isFinished' in first) && !('job' in first) && !('totalEventCount' in first)) {
+      throw new MetricsQueryError('invalid-response', 'Metrics response is missing its summary or event kind');
+    }
+    // The GET returns the entire result. Detect a truncated body even when
+    // truncation happens cleanly between complete JSON lines.
+    if (first.totalEventCount !== undefined) {
+      const count = first.totalEventCount;
+      if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
+        throw new MetricsQueryError('invalid-response', 'Metrics response has an invalid totalEventCount');
+      }
+      if (count !== rows.length) {
+        throw new MetricsQueryError('incomplete-response', `Metrics response expected ${count} events but received ${rows.length}`);
+      }
+    }
+    if (rows.length === 0 && first.isFinished !== true && status !== 'completed') {
+      throw new MetricsQueryError('incomplete-response', 'Metrics response ended without samples or a completed empty result');
+    }
+  }
+  if (rows.some((row) => typeof row._kind !== 'string' || row._kind.length === 0)) {
+    throw new MetricsQueryError('invalid-response', 'Metrics response contains an event without a kind');
+  }
+  return rows as RawRow[];
 }
 
 function toSample(row: RawRow): MetricSample {
