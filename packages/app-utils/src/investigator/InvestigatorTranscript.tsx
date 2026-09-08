@@ -38,6 +38,8 @@ import {
   parseCodeLines,
   type CodeResultUi,
 } from './codeResult.js';
+import { reportToSummary, type ReportResultUi } from './reportResult.js';
+import { splitBlocks } from './markdownBlocks.js';
 import s from './InvestigatorChat.module.css';
 
 // ─────────────────────────────────────────────────────────────────
@@ -181,14 +183,43 @@ function renderAssistantMarkdown(text: string): ReactNode[] {
       nodes.push(<pre key={`pre-${nodeKey++}`}>{part.body}</pre>);
       continue;
     }
-    // Split text into paragraphs by blank lines. Inside each para,
-    // check for GFM tables first (they're contiguous pipe-delimited
-    // lines with a `|---|---|` separator) and fall through to
-    // inline-rendered paragraphs otherwise.
-    const paras = part.body.split(/\n{2,}/);
-    for (const para of paras) {
-      const trimmed = para.trim();
-      if (!trimmed) continue;
+    // Segment into headings, lists and paragraphs. Headings and lists
+    // used to fall through as prose, which turned `## Scope` into literal
+    // hashes and collapsed a bullet list into one run-on paragraph —
+    // fine for a two-line answer, unreadable for a report.
+    for (const block of splitBlocks(part.body)) {
+      if (block.kind === 'heading') {
+        // Offset so a report's top-level `#` sits under the card's own
+        // title rather than competing with it.
+        const Tag = `h${Math.min(block.level + 2, 6)}` as 'h3';
+        nodes.push(
+          <Tag key={`h-${nodeKey++}`} className={s.assistantHeading}>
+            {renderInline(block.text)}
+          </Tag>,
+        );
+        continue;
+      }
+      if (block.kind === 'list') {
+        const ListTag = block.ordered ? 'ol' : 'ul';
+        nodes.push(
+          <ListTag key={`l-${nodeKey++}`} className={s.assistantList}>
+            {block.items.map((item, i) => (
+              <li key={i}>
+                {renderInline(item.text)}
+                {item.children.length > 0 && (
+                  <ul className={s.assistantList}>
+                    {item.children.map((child, j) => (
+                      <li key={j}>{renderInline(child.text)}</li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            ))}
+          </ListTag>,
+        );
+        continue;
+      }
+      const trimmed = block.text;
       const parsed = tryParseTable(trimmed);
       if (parsed) {
         nodes.push(
@@ -437,6 +468,14 @@ function ToolCallCard({
   // won't be.
   if (ui?.kind === 'code') {
     return <CodeCard ui={ui as CodeResultUi} />;
+  }
+
+  // A report is a headline plus one markdown document, which is the same
+  // shape a summary already renders — its findings are exactly "a heading
+  // plus the prose under it". Reusing that card keeps the two from
+  // drifting apart.
+  if (ui?.kind === 'report') {
+    return <SummaryCard ui={reportToSummary(ui as ReportResultUi)} />;
   }
 
   if (name === 'run_search') {
