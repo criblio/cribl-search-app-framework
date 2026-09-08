@@ -90,6 +90,7 @@ export {
   runMetricsQuery,
   queryRange,
   queryInstant,
+  runMetricsDiscovery,
   listMetricMetadata,
   listLabels,
   listSeries,
@@ -101,9 +102,11 @@ export {
   type MetricSample,
   type MetricSeries,
   type MetricMetadata,
+  type MetricsDiscoveryResult,
   type SearchDatasetInfo,
 } from './metrics.js';
 export {
+  browserMetricsCatalog,
   createMetricsCatalog,
   type CatalogTransport,
   type CatalogMetadata,

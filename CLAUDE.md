@@ -125,9 +125,9 @@ endpoint return a completed job with **zero rows** on some workspaces —
 no error, indistinguishable from "this workspace has no metrics"
 (verified against one holding 1,187 active metrics and 35,354 series).
 `@cribl/app-utils/metrics-catalog` wraps the engine's real catalog API
-instead; pass a `catalog` to `createRunMetricsQueryTool` (or to
-`listLabels`/`listMetricMetadata`/`listSeries`) and discovery uses it,
-falling back to the dot-command only when the catalog is unreachable —
+instead. Browser metrics calls use it automatically; a server-side host
+with a custom metrics transport passes the matching `catalog` explicitly.
+Discovery falls back to the dot-command only when the catalog is unreachable —
 those endpoints are `x-cribl-internal` and Cribl.Cloud-only, so a 404
 is a deployment fact rather than a bug. Two path facts the spec does not
 state: the engine id comes from `GET

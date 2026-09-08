@@ -25,14 +25,14 @@
  *
  * Those dot-commands return ZERO rows on some workspaces while PromQL
  * over the identical transport works — a completed job with no events
- * and no error, indistinguishable from "there are no metrics". Where a
- * `catalog` is supplied (see `metrics-catalog.ts`) the three discovery
- * functions use the engine's first-class catalog API instead and fall
- * back to the dot-command only if the catalog is unreachable.
+ * and no error, indistinguishable from "there are no metrics". In the
+ * browser the discovery functions use the engine's first-class catalog
+ * API automatically and fall back to the dot-command if it is unreachable.
+ * A non-browser host supplies the catalog matching its custom transport.
  */
 
 import { apiUrl } from './search.js';
-import type { MetricsCatalog } from './metrics-catalog.js';
+import { browserMetricsCatalog, type MetricsCatalog } from './metrics-catalog.js';
 
 /** Default dataset for metrics queries. */
 export const METRICS_DATASET = 'metrics';
@@ -58,10 +58,10 @@ export interface MetricsQueryOptions {
    */
   transport?: MetricsTransport;
   /**
-   * Catalog client for discovery (`listMetricMetadata`, `listLabels`,
-   * `listSeries`). When present those prefer it and fall back to the
-   * dot-commands; when absent they use the dot-commands alone. Ignored
-   * by the PromQL paths, which the catalog has no part in.
+   * Catalog client for discovery (`runMetricsDiscovery`,
+   * `listMetricMetadata`, `listLabels`, `listSeries`). Browser calls get a
+   * framework-owned default. A non-browser host with a custom transport
+   * supplies its matching catalog. Ignored by PromQL paths.
    */
   catalog?: MetricsCatalog;
 }
@@ -278,9 +278,18 @@ async function viaCatalog<T>(
   fromCatalog: (catalog: MetricsCatalog) => Promise<T>,
   fromDotCommand: () => Promise<T>,
 ): Promise<T> {
-  if (!opts.catalog) return fromDotCommand();
+  // Browser callers should not have to know that discovery lives on a
+  // different endpoint from PromQL. A custom transport is different: its
+  // authentication and base URL are opaque to the framework, so only an
+  // explicitly paired catalog is safe there.
+  const catalog =
+    opts.catalog ??
+    (!opts.transport || opts.transport === defaultMetricsTransport
+      ? browserMetricsCatalog({ dataset: opts.dataset })
+      : undefined);
+  if (!catalog) return fromDotCommand();
   try {
-    return await fromCatalog(opts.catalog);
+    return await fromCatalog(catalog);
   } catch {
     // The catalog's own error is deliberately swallowed: the fallback
     // either answers the question or reports its own failure, and
@@ -288,6 +297,108 @@ async function viaCatalog<T>(
     // isn't available in their deployment.
     return fromDotCommand();
   }
+}
+
+export interface MetricsDiscoveryResult {
+  rows: Record<string, unknown>[];
+  note?: string;
+}
+
+const DISCOVERY_RE = /^\.(catalog|metadata|labels|series|values)\b\s*(.*)$/;
+
+/**
+ * Answer the metrics discovery grammar from the engine catalog.
+ *
+ * This sits beside the PromQL query client rather than in an agent adapter so
+ * every app can offer the same `.catalog`, `.labels`, `.metadata`, `.series`,
+ * and `.values` behavior. Returns undefined for an unknown command or when a
+ * custom transport has no matching catalog, allowing the caller to pass the
+ * query through to an endpoint that may support additional dot-commands.
+ */
+export async function runMetricsDiscovery(
+  query: string,
+  opts: MetricsQueryOptions = {},
+  limit = 40,
+): Promise<MetricsDiscoveryResult | undefined> {
+  const match = DISCOVERY_RE.exec(query.trim());
+  if (!match) return undefined;
+  const catalog =
+    opts.catalog ??
+    (!opts.transport || opts.transport === defaultMetricsTransport
+      ? browserMetricsCatalog({ dataset: opts.dataset })
+      : undefined);
+  if (!catalog) return undefined;
+
+  const [, command, rest] = match;
+  const arg = rest.trim();
+
+  if (command === 'catalog') {
+    const { totals, rows, matched } = await catalog.summary({
+      filter: arg || undefined,
+      limit,
+      signal: opts.signal,
+    });
+    return {
+      rows: rows.map((row) => ({ ...row })),
+      note:
+        `${totals.activeMetrics} active metrics of ${totals.metrics} known, ` +
+        `${totals.series} active series, ${totals.samplesPerMinute} samples/min` +
+        (arg ? `. ${matched} match ${JSON.stringify(arg)}` : '') +
+        (matched > rows.length ? `; showing the ${rows.length} with the most series` : ''),
+    };
+  }
+
+  if (command === 'metadata') {
+    const metadata = await catalog.metadata(arg || undefined, opts.signal);
+    return {
+      rows: metadata.slice(0, limit).map((entry) => ({ ...entry })),
+      note:
+        `${metadata.length} metric${metadata.length === 1 ? '' : 's'}` +
+        (arg ? ` matching ${JSON.stringify(arg)}` : '') +
+        (metadata.length > limit ? `; showing ${limit}` : ''),
+    };
+  }
+
+  if (command === 'labels') {
+    if (arg) {
+      const dimensions = await catalog.metricLabels(arg, opts.signal);
+      return {
+        rows: dimensions.map((dimension) => ({
+          label: dimension.key,
+          distinct: dimension.distinct,
+          share: Number(dimension.share.toFixed(4)),
+        })),
+        note: `label dimensions of ${arg}, by share of its cardinality`,
+      };
+    }
+    const labels = await catalog.labels(opts.signal);
+    return {
+      rows: labels.slice(0, limit).map((label) => ({ label })),
+      note:
+        `${labels.length} label name${labels.length === 1 ? '' : 's'} in the dataset` +
+        (labels.length > limit ? `; showing ${limit}` : ''),
+    };
+  }
+
+  if (command === 'values') {
+    if (!arg) return { rows: [], note: '.values needs a label name, e.g. `.values job`' };
+    const values = await catalog.labelValues(arg, opts.signal);
+    return {
+      rows: values.slice(0, limit).map((value) => ({ value })),
+      note:
+        `${values.length} value${values.length === 1 ? '' : 's'} of label ${arg}` +
+        (values.length > limit ? `; showing ${limit}` : ''),
+    };
+  }
+
+  if (!arg) return { rows: [], note: '.series needs a metric name or selector, e.g. `.series up`' };
+  const series = await catalog.series(arg, opts.signal);
+  return {
+    rows: series.slice(0, limit).map((labels) => ({ ...labels })),
+    note:
+      `${series.length} series matching ${arg}` +
+      (series.length > limit ? `; showing ${limit}` : ''),
+  };
 }
 
 /** List metric names + type/help/unit, optionally filtered by prefix. */
