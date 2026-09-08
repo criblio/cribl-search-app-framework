@@ -15,7 +15,6 @@ runs:
     - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
         node-version: '22'
-        cache: npm
     - name: Clone shared framework at recorded commit (pinned-clone mode)
       if: inputs.framework-sha != ''
       shell: bash
@@ -49,7 +48,7 @@ runs:
             npm --prefix "$FW/packages/$pkg" ci
           done
         fi
-    - name: Install locked dependencies
+    - name: Resolve and install dependencies
       shell: bash
       env:
         NODE_AUTH_TOKEN: ${{ inputs.registry-token }}
@@ -66,6 +65,13 @@ runs:
         if [ -n "$NODE_AUTH_TOKEN" ]; then
           echo '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' >> .npmrc
         fi
+        # GoatTown's workerd cell can update package.json but cannot run npm,
+        # so a generated app may have no lockfile or one that predates a new
+        # dependency. Resolve the manifest here, then install from that exact
+        # result. The generated lock remains in the checkout for the license
+        # gate, release evidence, and SBOM below. setup-node caching is omitted
+        # because it requires the lockfile before this step can create it.
+        npm install --package-lock-only --ignore-scripts --no-audit --no-fund
         npm ci
     - name: Verify source
       shell: bash
