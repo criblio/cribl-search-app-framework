@@ -3,7 +3,10 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [master]
+    # Both, because a generated app picks its own default branch name and
+    # the template cannot know which. Naming only one silently skips CI on
+    # every push for half of them.
+    branches: [main, master]
 
 permissions:
   contents: read
@@ -17,6 +20,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # The skeleton ships no package-lock.json: pinning every dependency
+      # at scaffold time would hand each new app a tree that is already
+      # stale. But the release-build action runs `npm ci`, and its
+      # setup-node step uses `cache: npm` — both hard-fail with no
+      # lockfile, so a freshly generated app's first CI run never reaches
+      # its own code. Generate one here: after checkout, before the
+      # action, where both can find it.
+      #
+      # Only when absent. Once an app commits its lockfile it must build
+      # from those exact pins, and `--package-lock-only` re-resolves
+      # against package.json — which would quietly turn `npm ci` back
+      # into `npm install` and make the build unreproducible.
+      - name: Generate lockfile
+        run: |
+          set -euo pipefail
+          if [ ! -f package-lock.json ]; then
+            npm install --package-lock-only
+          fi
       # Registry mode: no `framework-sha`, so the action skips the
       # pinned-clone step and `npm ci` resolves @criblio from the registry
       # against this app's own lockfile. The framework version you build
