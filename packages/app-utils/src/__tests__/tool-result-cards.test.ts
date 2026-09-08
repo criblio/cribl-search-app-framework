@@ -12,7 +12,7 @@ import {
   decodeCodeBody,
   parseCodeLines,
 } from '../investigator/codeResult.js';
-import { formatCell, inferColumns } from '../investigator/ResultTable.js';
+import { formatCell, inferColumns } from '../investigator/resultRows.js';
 
 describe('decodeCodeBody', () => {
   it('decodes a body that arrived with its escapes intact', () => {

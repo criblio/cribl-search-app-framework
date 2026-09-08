@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dist = join(root, 'dist');
+const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
 function filesUnder(dir) {
   return readdirSync(dir, { recursive: true, withFileTypes: true })
@@ -55,5 +56,79 @@ for (const name of ['actionKind_create', 'summaryChip_noop']) {
   if (!provisioning.includes(`"${name}"`)) fail(`dynamic class ${name} is missing`);
 }
 
+/**
+ * A stylesheet must not be reachable from two entry points except through
+ * an exported subpath.
+ *
+ * esm.sh builds each exported subpath as its own bundle and inlines what
+ * only that bundle uses. An import that names another exported subpath is
+ * a clean boundary — it becomes `import "…/es2022/viz.mjs"`, a real build,
+ * and its CSS is handled. A *deep internal* module reachable from two
+ * entry points is not: esm.sh serves it from the raw `dist/` path and
+ * leaves its CSS import as `<name>.css.mjs` — raw CSS in a file an esbuild
+ * consumer parses as JavaScript, dying on the first rule.
+ *
+ * 0.8.4 shipped exactly that. A shared `ResultTable`, imported by deep
+ * path from both the transcript and the metrics card, pulled the chat
+ * shell's stylesheet across the boundary and broke every esm.sh consumer
+ * of either entry. `./viz` proves the legal shape: the metrics card reaches
+ * it too, but through the exported subpath, so it has always been fine.
+ *
+ * Nothing about the tarball looks wrong — the break only appears
+ * downstream — so it has to be caught here.
+ */
+const entryPoints = new Map();
+for (const [subpath, target] of Object.entries(pkg.exports ?? {})) {
+  if (typeof target !== 'string' || !target.endsWith('.js')) continue;
+  entryPoints.set(join(root, target), subpath);
+}
+if (entryPoints.size === 0) fail('no entry points found in package.json exports');
+
+/**
+ * Stylesheets an entry bundles itself.
+ *
+ * Traversal stops at any *other* entry point: esm.sh serves that as its own
+ * bundle, so whatever lies beyond it is that entry's problem, not this
+ * one's. Everything short of such a boundary gets inlined into this bundle.
+ */
+function stylesheetsBundledBy(entry) {
+  const found = new Set();
+  const visited = new Set();
+  const queue = [entry];
+  while (queue.length > 0) {
+    const file = queue.pop();
+    if (visited.has(file) || !existsSync(file)) continue;
+    visited.add(file);
+    const source = readFileSync(file, 'utf8');
+    for (const match of source.matchAll(/(?:from\s*|import\s*)["'](\.[^"']+)["']/g)) {
+      const resolved = join(dirname(file), match[1]);
+      if (resolved.endsWith('.css')) found.add(relative(dist, resolved));
+      else if (resolved.endsWith('.js') && !entryPoints.has(resolved)) queue.push(resolved);
+    }
+  }
+  return found;
+}
+
+const bundledBy = new Map();
+for (const [entry, subpath] of entryPoints) {
+  for (const sheet of stylesheetsBundledBy(entry)) {
+    if (!bundledBy.has(sheet)) bundledBy.set(sheet, []);
+    bundledBy.get(sheet).push(subpath);
+  }
+}
+const shared = [...bundledBy].filter(([, subpaths]) => subpaths.length > 1);
+if (shared.length > 0) {
+  fail(
+    'a stylesheet is bundled into more than one entry point, which esm.sh ' +
+      'code-splits into a .css.mjs that esbuild consumers cannot load:\n' +
+      shared.map(([sheet, subpaths]) => `  ${sheet} <- ${subpaths.join(', ')}`).join('\n') +
+      '\nGive each entry point its own stylesheet, and share only CSS-free ' +
+      'modules or whole exported subpaths.',
+  );
+}
+
 if (!existsSync(join(dist, 'styles.css'))) fail('aggregate styles.css is missing');
-process.stderr.write(`validated ${classFiles.length} generated CSS class maps (${seen.size} globally unique names)\n`);
+process.stderr.write(
+  `validated ${classFiles.length} generated CSS class maps (${seen.size} globally unique names), ` +
+    `${bundledBy.size} stylesheets each bundled by one entry point\n`,
+);

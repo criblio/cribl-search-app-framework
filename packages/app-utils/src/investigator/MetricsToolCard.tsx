@@ -17,7 +17,7 @@
  */
 import { LineChart, BarList, seriesColor, formatCompact, type LineSeries } from '../viz/index.js';
 import type { MetricsQueryUi } from '../agent-tools.js';
-import { ResultTable } from './ResultTable.js';
+import { formatCell, inferColumns } from './resultRows.js';
 import s from './MetricsToolCard.module.css';
 
 const MAX_CHART_SERIES = 8;
@@ -89,11 +89,59 @@ export default function MetricsToolCard({ ui }: { ui: MetricsQueryUi }) {
       ) : discovery ? (
         <>
           {ui.note && <div className={s.note}>{ui.note}</div>}
-          <ResultTable rows={rows} />
+          <DiscoveryTable rows={rows} />
         </>
       ) : (
         <div className={s.empty}>
           {ui.note ?? 'No data returned'}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Rows shown before the rest are summarized. */
+const MAX_DISCOVERY_ROWS = 20;
+
+/**
+ * The discovery table.
+ *
+ * Deliberately a local copy of the transcript's `ResultTable` rather than
+ * an import of it. This module is its own package entry point, and a
+ * stylesheet reachable from two entry points is code-split by esm.sh into
+ * a `.css.mjs` — raw CSS in a `.mjs` file, which an esbuild consumer
+ * parses as JavaScript and dies on. Importing the transcript's table
+ * would pull the transcript's stylesheet in here and do exactly that. The
+ * column and cell logic is shared through `resultRows.ts`, which has no
+ * CSS to split.
+ */
+function DiscoveryTable({ rows }: { rows: Record<string, unknown>[] }) {
+  const shown = rows.slice(0, MAX_DISCOVERY_ROWS);
+  const cols = inferColumns(shown);
+  const hidden = rows.length - shown.length;
+  return (
+    <div className={s.table}>
+      <table className={s.tableGrid}>
+        <thead>
+          <tr>
+            {cols.map((col) => (
+              <th key={col}>{col}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((row, i) => (
+            <tr key={i}>
+              {cols.map((col) => (
+                <td key={col}>{formatCell(row[col])}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {hidden > 0 && (
+        <div className={s.more}>
+          … {hidden} more row{hidden === 1 ? '' : 's'} (all fed to the agent)
         </div>
       )}
     </div>
