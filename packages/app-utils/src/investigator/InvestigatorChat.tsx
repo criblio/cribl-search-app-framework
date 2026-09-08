@@ -123,7 +123,7 @@ export interface InvestigatorChatProps<S extends InvestigatorSeedBase = Investig
   /** Render a custom card for a tool result's UI payload. Called
    *  whenever a tool call entry has a result with `ui`; returning
    *  null/undefined falls through to the built-in cards for kind
-   *  'search' and 'summary' (unknown kinds render nothing). */
+   *  'search', 'summary', and 'code' (unknown kinds render nothing). */
   renderToolCard?: (ui: ToolResultUi, ctx: { entry: unknown }) => ReactNode | null;
   /** Called after the shell consumes the mount-time seed — apps
    *  typically clear their router state here so a reload doesn't

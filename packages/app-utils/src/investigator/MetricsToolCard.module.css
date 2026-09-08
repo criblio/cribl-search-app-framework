@@ -57,3 +57,12 @@
   font-size: var(--cds-font-size-xs);
   color: var(--cds-color-fg-subtle);
 }
+
+/* Caption above a discovery table — the tool's own summary of what it
+   counted ("1187 active metrics of 3402 known, …"), which is often the
+   whole answer and the table only the evidence. */
+.note {
+  margin-bottom: var(--cds-space-xs);
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-fg-subtle);
+}

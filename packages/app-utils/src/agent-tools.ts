@@ -42,6 +42,32 @@ export interface ToolCallInvocation {
  */
 export type ToolResultUi = { kind: string } & Record<string, unknown>;
 
+/**
+ * UI payload for a tool result carrying file or snippet text — rendered
+ * as a code card in the transcript.
+ *
+ * Emitted by server-side file-reading tools (GoatTown's `read_file`)
+ * rather than by anything in this module, which is exactly why it is
+ * declared here: an app that had to reverse-engineer the shape from a
+ * rendered payload got an `as` cast and a guess at whether `args` was a
+ * string or an object. It is both — hosts differ — so consumers should
+ * use `codeResultTitle` rather than reaching into it.
+ */
+export type CodeResultUi = {
+  kind: 'code';
+  /** Tool that produced it, e.g. `read_file`. Shown as the card's badge. */
+  tool?: string;
+  /** The tool's arguments. JSON-encoded on the wire; `path` is lifted out
+   *  for the card header. */
+  args?: string | Record<string, unknown>;
+  /** The text. May carry a `<lineNo>\t` gutter prefix per line. */
+  body?: string;
+  /** Language hint, when the producing tool knows one. */
+  language?: string;
+  /** Set instead of `body` when the tool failed. */
+  error?: string;
+} & Record<string, unknown>;
+
 export interface ToolExecutionResult {
   id: string;
   name: string;
@@ -278,8 +304,17 @@ export type MetricsQueryUi = {
   step?: number;
   /** Range queries: per-series points (t in epoch ms) for a line chart. */
   series?: Array<{ name: string; points: Array<{ t: number; v: number }> }>;
-  /** Instant queries: one row per series (labels + _value) for a bar list. */
+  /** Instant queries: one row per series (labels + _value) for a bar list.
+   *  Discovery commands: one row per metric / label / series, with no
+   *  `_value` — a table, not a chart. */
   rows?: Record<string, unknown>[];
+  /** `'discovery'` when `query` was a dot-command rather than PromQL.
+   *  Renderers key off this to pick a table over a chart instead of
+   *  inferring it from the absence of `_value`. */
+  mode?: 'discovery';
+  /** The tool's own one-line summary of a discovery result — totals and
+   *  what was truncated. Often the answer; the rows are the evidence. */
+  note?: string;
   error?: string;
 } & Record<string, unknown>;
 
@@ -465,7 +500,7 @@ export function createRunMetricsQueryTool(
             id: call.id,
             name: call.name,
             content,
-            ui: { ...base, rows: found.rows, note: found.note },
+            ui: { ...base, mode: 'discovery', rows: found.rows, note: found.note },
           };
         }
       }

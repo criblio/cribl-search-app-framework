@@ -30,4 +30,17 @@ export {
   type InvestigatorToolCallEntry,
   type InvestigatorErrorEntry,
 } from './InvestigatorTranscript.js';
+export {
+  ResultTable,
+  inferColumns,
+  formatCell,
+  type ResultTableProps,
+} from './ResultTable.js';
+export {
+  decodeCodeBody,
+  parseCodeLines,
+  codeResultTitle,
+  type CodeResultUi,
+  type CodeLine,
+} from './codeResult.js';
 export { exportAsPng } from './exportInvestigation.js';
