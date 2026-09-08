@@ -538,3 +538,27 @@
   margin: 0;
   padding-left: var(--cds-space-md);
 }
+
+/* Headings and lists inside rendered markdown. Reports are built almost
+   entirely out of both, so without these a report card reads as one wall
+   of run-on prose with literal hash marks in it. */
+.assistantHeading {
+  margin: var(--cds-space-md) 0 var(--cds-space-xs);
+  font-size: var(--cds-font-size-sm);
+  font-weight: var(--cds-font-weight-semibold);
+  color: var(--cds-color-fg);
+  line-height: 1.35;
+}
+.assistantHeading:first-child {
+  margin-top: 0;
+}
+.assistantList {
+  margin: 0 0 var(--cds-space-sm);
+  padding-left: var(--cds-space-lg);
+}
+.assistantList li {
+  margin-bottom: 2px;
+}
+.assistantList .assistantList {
+  margin: 2px 0 0;
+}

@@ -38,6 +38,12 @@ export {
   DEFAULT_MAX_COLS,
 } from './resultRows.js';
 export {
+  reportToSummary,
+  reportSections,
+  type ReportResultUi,
+} from './reportResult.js';
+export { splitBlocks, type MarkdownBlock, type MarkdownListItem } from './markdownBlocks.js';
+export {
   decodeCodeBody,
   parseCodeLines,
   codeResultTitle,
