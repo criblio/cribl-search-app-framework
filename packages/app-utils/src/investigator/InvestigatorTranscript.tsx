@@ -3,7 +3,7 @@
  *
  * Renders a list of InvestigatorTranscriptEntry: user bubbles,
  * streaming assistant markdown, tool-call cards (search / summary /
- * app-supplied via renderToolCard), and error banners. It owns no
+ * code / app-supplied via renderToolCard), and error banners. It owns no
  * agent loop and no transport — entries come in as props, so the
  * same pixels serve both drivers:
  *
@@ -22,7 +22,7 @@
  * Styles are shared with the chat shell via
  * InvestigatorChat.module.css so both drivers stay pixel-identical.
  */
-import { useMemo, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Button } from '@capra/core';
 import type { LoopEvent } from '../agent-loop.js';
 import { isSessionExpiredError, type AgentToolCall } from '../agent.js';
@@ -32,6 +32,12 @@ import type {
   ToolExecutionResult,
   ToolResultUi,
 } from '../agent-tools.js';
+import { ResultTable } from './ResultTable.js';
+import {
+  codeResultTitle,
+  parseCodeLines,
+  type CodeResultUi,
+} from './codeResult.js';
 import s from './InvestigatorChat.module.css';
 
 // ─────────────────────────────────────────────────────────────────
@@ -276,8 +282,8 @@ export interface InvestigatorTranscriptProps {
   /** Render a custom card for a tool result's UI payload. Called
    *  whenever a tool call entry has a result with `ui`; returning
    *  null/undefined falls through to the built-in cards for kind
-   *  'search' and 'summary' (unknown kinds render nothing). Same
-   *  contract as InvestigatorChatProps.renderToolCard. */
+   *  'search', 'summary', and 'code' (unknown kinds render nothing).
+   *  Same contract as InvestigatorChatProps.renderToolCard. */
   renderToolCard?: (ui: ToolResultUi, ctx: { entry: unknown }) => ReactNode | null;
   /** Show the thinking indicator after the last entry while the
    *  investigation (live or replayed) is still in flight. */
@@ -425,6 +431,14 @@ function ToolCallCard({
     }
   }
 
+  // Dispatched on the payload rather than the tool name: `kind: 'code'`
+  // is what a *server-side* tool emits, and the framework does not know
+  // what those are called — GoatTown's is `read_file`, the next host's
+  // won't be.
+  if (ui?.kind === 'code') {
+    return <CodeCard ui={ui as CodeResultUi} />;
+  }
+
   if (name === 'run_search') {
     return (
       <SearchCard
@@ -481,9 +495,76 @@ function SearchCard({
       </div>
       <pre className={s.toolCallQuery}>{args.query ?? '(no query)'}</pre>
       {ui?.error && <div className={s.toolResultError}>{ui.error}</div>}
-      {ui && !ui.error && ui.rows.length > 0 && <ResultTable ui={ui} />}
+      {ui && !ui.error && ui.rows.length > 0 && (
+        <ResultTable rows={ui.rows} rowCount={ui.rowCount} />
+      )}
       {ui && !ui.error && ui.rows.length === 0 && (
         <div className={s.toolResultMeta}>No results</div>
+      )}
+    </div>
+  );
+}
+
+/** Lines shown before the card collapses. Enough to see what the file is;
+ *  short enough that a 2,000-line read doesn't bury the rest of the
+ *  transcript. */
+const CODE_COLLAPSED_LINES = 15;
+
+/**
+ * Card for a `kind: 'code'` tool result — a file a server-side tool read.
+ *
+ * The body is rendered as real text in a `<pre>`, not stringified: the
+ * whole failure this replaces was a JSON dump showing `\n` escapes. Line
+ * numbers go in their own non-selectable span so copying the snippet
+ * yields the source rather than the source with a gutter welded on.
+ */
+function CodeCard({ ui }: { ui: CodeResultUi }) {
+  const [expanded, setExpanded] = useState(false);
+  const title = codeResultTitle(ui);
+  const lines = parseCodeLines(typeof ui.body === 'string' ? ui.body : '');
+  const shown = expanded ? lines : lines.slice(0, CODE_COLLAPSED_LINES);
+  const hidden = lines.length - shown.length;
+
+  return (
+    <div className={s.toolCall}>
+      <div className={s.toolCallHeader}>
+        <div>
+          <div className={s.toolCallDescription}>{title}</div>
+          <div className={s.toolCallMeta}>
+            {ui.tool ?? 'code'}
+            {!ui.error && ` · ${lines.length} line${lines.length === 1 ? '' : 's'}`}
+          </div>
+        </div>
+      </div>
+      {ui.error ? (
+        <div className={s.toolResultError}>{ui.error}</div>
+      ) : lines.length === 0 ? (
+        <div className={s.toolResultMeta}>Empty file</div>
+      ) : (
+        <>
+          <pre className={s.codeBody}>
+            {shown.map((line, i) => (
+              <span key={i}>
+                {line.no !== undefined && (
+                  <span className={s.codeLineNo}>{line.no}</span>
+                )}
+                {line.text}
+                {'\n'}
+              </span>
+            ))}
+          </pre>
+          {(hidden > 0 || expanded) && (
+            <button
+              type="button"
+              className={s.codeToggle}
+              onClick={() => setExpanded((v) => !v)}
+            >
+              {expanded
+                ? 'Show less'
+                : `Show ${hidden} more line${hidden === 1 ? '' : 's'}`}
+            </button>
+          )}
+        </>
       )}
     </div>
   );
@@ -523,54 +604,6 @@ function SummaryCard({ ui }: { ui?: SummaryUi }) {
   );
 }
 
-function ResultTable({ ui }: { ui: RunSearchUi }) {
-  const { cols, rows } = useMemo(() => {
-    const capped = ui.rows.slice(0, 20);
-    const keyCounts = new Map<string, number>();
-    for (const r of capped) {
-      for (const k of Object.keys(r)) keyCounts.set(k, (keyCounts.get(k) ?? 0) + 1);
-    }
-    const cols = Array.from(keyCounts.entries())
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .map(([k]) => k)
-      .slice(0, 8);
-    return { cols, rows: capped };
-  }, [ui.rows]);
-
-  return (
-    <div className={s.toolResult}>
-      <table className={s.toolResultTable}>
-        <thead>
-          <tr>
-            {cols.map((c) => (
-              <th key={c}>{c}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, i) => (
-            <tr key={i}>
-              {cols.map((c) => (
-                <td key={c}>{formatCell(row[c])}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {ui.rowCount > 20 && (
-        <div className={s.toolResultMeta}>
-          … {ui.rowCount - 20} more row{ui.rowCount - 20 === 1 ? '' : 's'}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function formatCell(v: unknown): string {
-  if (v == null) return '';
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
-}
 
 function parseRunSearchArgs(raw: string): {
   query?: string;
