@@ -24,7 +24,14 @@
  */
 
 import { kqlInteger, kqlTime } from './kql.js';
-import { queryInstant, queryRange, METRICS_DATASET, MetricsQueryError, type MetricsTransport } from './metrics.js';
+import {
+  queryInstant,
+  queryRange,
+  runMetricsDiscovery,
+  METRICS_DATASET,
+  MetricsQueryError,
+  type MetricsTransport,
+} from './metrics.js';
 import type { MetricsCatalog } from './metrics-catalog.js';
 
 export interface ToolCallInvocation {
@@ -304,115 +311,17 @@ export interface RunMetricsQueryDeps {
    */
   transport?: MetricsTransport;
   /**
-   * Catalog client backing the discovery dot-commands. Supply it and
-   * `.metadata` / `.labels` / `.series` are answered from the engine's
-   * catalog API; omit it and they go to the transport as before.
+   * Catalog client backing the discovery dot-commands. Browser tools get the
+   * framework's catalog automatically. A non-browser host that injects a
+   * custom metrics transport must inject the matching catalog too.
    */
   catalog?: MetricsCatalog;
 }
-
-/**
- * Discovery, expressed in the grammar the model already has.
- *
- * `.labels` / `.metadata` / `.series <m>` are what the metrics query
- * endpoint has always accepted, and what this tool's description has
- * always documented — but they return nothing on workspaces that DO
- * have a catalog. Rather than add a fourth Cribl tool (and a fourth
- * thing for a model to choose wrong), the same words are recognized
- * here and answered from the catalog API, plus two the catalog can
- * answer and the transport never could:
- *
- *   .catalog [substring]   → totals + the busiest metrics
- *   .labels <metric>       → one metric's label dimensions, by share
- *
- * A dot-command that isn't one of these falls through to the transport,
- * so anything the endpoint grows keeps working without a change here.
- */
-const DISCOVERY_RE = /^\.(catalog|metadata|labels|series|values)\b\s*(.*)$/;
 
 /** Rows of discovery output handed to the model. A thousand metric names
  *  is not more useful than the busiest forty, and it stays in context
  *  for the rest of the session. */
 const DISCOVERY_ROW_CAP = 40;
-
-/** Answer a discovery dot-command from the catalog. Returns undefined
- *  when the command isn't one this understands, so the caller can send
- *  it to the transport unchanged. */
-async function runDiscovery(
-  catalog: MetricsCatalog,
-  query: string,
-  limit: number,
-  signal?: AbortSignal,
-): Promise<{ rows: Record<string, unknown>[]; note?: string } | undefined> {
-  const m = DISCOVERY_RE.exec(query.trim());
-  if (!m) return undefined;
-  const [, command, rest] = m;
-  const arg = rest.trim();
-
-  if (command === 'catalog') {
-    const { totals, rows, matched } = await catalog.summary({ filter: arg || undefined, limit, signal });
-    return {
-      rows: rows.map((r) => ({ ...r })),
-      note:
-        `${totals.activeMetrics} active metrics of ${totals.metrics} known, ` +
-        `${totals.series} active series, ${totals.samplesPerMinute} samples/min` +
-        (arg ? `. ${matched} match ${JSON.stringify(arg)}` : '') +
-        (matched > rows.length ? `; showing the ${rows.length} with the most series` : ''),
-    };
-  }
-
-  if (command === 'metadata') {
-    const meta = await catalog.metadata(arg || undefined, signal);
-    return {
-      rows: meta.slice(0, limit).map((entry) => ({ ...entry })),
-      note:
-        `${meta.length} metric${meta.length === 1 ? '' : 's'}` +
-        (arg ? ` matching ${JSON.stringify(arg)}` : '') +
-        (meta.length > limit ? `; showing ${limit}` : ''),
-    };
-  }
-
-  if (command === 'labels') {
-    // `.labels` alone is dataset-wide; `.labels <metric>` is the far
-    // more useful per-metric breakdown, which tells a model which
-    // labels are worth grouping by before it writes the PromQL.
-    if (arg) {
-      const dims = await catalog.metricLabels(arg, signal);
-      return {
-        rows: dims.map((d) => ({
-          label: d.key,
-          distinct: d.distinct,
-          share: Number(d.share.toFixed(4)),
-        })),
-        note: `label dimensions of ${arg}, by share of its cardinality`,
-      };
-    }
-    const labels = await catalog.labels(signal);
-    return {
-      rows: labels.slice(0, limit).map((label) => ({ label })),
-      note: `${labels.length} label name${labels.length === 1 ? '' : 's'} in the dataset` +
-        (labels.length > limit ? `; showing ${limit}` : ''),
-    };
-  }
-
-  if (command === 'values') {
-    if (!arg) return { rows: [], note: '.values needs a label name, e.g. `.values job`' };
-    const values = await catalog.labelValues(arg, signal);
-    return {
-      rows: values.slice(0, limit).map((value) => ({ value })),
-      note: `${values.length} value${values.length === 1 ? '' : 's'} of label ${arg}` +
-        (values.length > limit ? `; showing ${limit}` : ''),
-    };
-  }
-
-  // command === 'series'
-  if (!arg) return { rows: [], note: '.series needs a metric name or selector, e.g. `.series up`' };
-  const series = await catalog.series(arg, signal);
-  return {
-    rows: series.slice(0, limit).map((labels) => ({ ...labels })),
-    note: `${series.length} series matching ${arg}` + (series.length > limit ? `; showing ${limit}` : ''),
-  };
-}
 
 /** Derive a human-readable series name from a PromQL label set. */
 function metricsSeriesName(labels: Record<string, string>): string {
@@ -455,8 +364,12 @@ export function createRunMetricsQueryTool(
 
       // Discovery first: it's a different API, not a PromQL expression,
       // and it produces a table rather than a chart.
-      if (deps.catalog && args.query.trimStart().startsWith('.')) {
-        const found = await runDiscovery(deps.catalog, args.query, DISCOVERY_ROW_CAP, signal);
+      if (args.query.trimStart().startsWith('.')) {
+        const found = await runMetricsDiscovery(
+          args.query,
+          { catalog: deps.catalog, dataset, transport, signal },
+          DISCOVERY_ROW_CAP,
+        );
         if (found) {
           const content = found.note
             ? `${found.note}\n${formatRowsForAgent(found.rows, DISCOVERY_ROW_CAP)}`

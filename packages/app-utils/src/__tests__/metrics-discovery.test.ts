@@ -9,14 +9,21 @@
  * back — an implementation that quietly used the transport would return
  * the right-looking empty list and pass any outcome-only test.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRunMetricsQueryTool, type MetricsQueryUi } from '../agent-tools.js';
-import { listLabels, listMetricMetadata, listSeries } from '../metrics.js';
+import {
+  listLabels,
+  listMetricMetadata,
+  listSeries,
+  runMetricsDiscovery,
+} from '../metrics.js';
 import type { MetricsCatalog } from '../metrics-catalog.js';
 
 /** The job-summary line, then nothing: what a workspace without the
  *  dot-command grammar returns. Completed, no error, no rows. */
 const EMPTY_NDJSON = '{"isFinished":true,"totalEventCount":0,"job":{"status":"completed"}}';
+
+afterEach(() => vi.unstubAllGlobals());
 
 function fakeCatalog(over: Partial<MetricsCatalog> = {}): MetricsCatalog {
   return {
@@ -42,6 +49,38 @@ function fakeCatalog(over: Partial<MetricsCatalog> = {}): MetricsCatalog {
 }
 
 describe('listMetricMetadata / listLabels / listSeries with a catalog', () => {
+  it('uses the catalog automatically with the browser transport', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('window', { CRIBL_API_URL: '/api/v1' });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        urls.push(url);
+        const body = url.includes('/local_search/engines')
+          ? {
+              items: [
+                {
+                  id: 'homelab',
+                  metricsDatasetId: 'metrics',
+                  datasets: ['metrics', 'otel'],
+                  status: 'ready',
+                },
+              ],
+            }
+          : { status: 'success', data: ['instance', 'job'] };
+        return new Response(JSON.stringify(body), { status: 200 });
+      }),
+    );
+
+    expect(await listLabels({ dataset: 'otel' })).toEqual(['instance', 'job']);
+    expect(urls).toEqual([
+      '/api/v1/m/default_search/search/local_search/engines',
+      '/api/v1/products/lakehouse_engine_metrics/engines/homelab/datasets/otel/prom/api/v1/labels',
+    ]);
+    expect(urls.some((url) => url.includes('/search/query'))).toBe(false);
+  });
+
   it('answers from the catalog and never calls the transport', async () => {
     const transport = vi.fn(async () => EMPTY_NDJSON);
     const catalog = fakeCatalog();
@@ -94,6 +133,36 @@ function call(args: Record<string, unknown>) {
 }
 
 describe('run_metrics_query discovery dot-commands', () => {
+  it('exposes .catalog from the shared metrics client, independent of the agent tool', async () => {
+    const result = await runMetricsDiscovery('.catalog up', { catalog: fakeCatalog() });
+    expect(result?.note).toContain('1182 active metrics of 1273 known');
+    expect(result?.rows).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'up' })]));
+  });
+
+  it('answers .catalog automatically in browser apps', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal('window', { CRIBL_API_URL: '/api/v1' });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        urls.push(url);
+        const body = url.includes('/local_search/engines')
+          ? { items: [{ id: 'homelab', metricsDatasetId: 'metrics', status: 'ready' }] }
+          : {
+              totals: { totalMetrics: 2, activeMetrics: 1, activeSeries: 3, dpm: 4 },
+              rows: [{ name: 'up', type: 'gauge', activeSeriesCount: 3 }],
+            };
+        return new Response(JSON.stringify(body), { status: 200 });
+      }),
+    );
+
+    const res = await createRunMetricsQueryTool()(call({ query: '.catalog' }));
+    expect(res.content).toContain('1 active metrics of 2 known');
+    expect(res.content).toContain('up');
+    expect(urls.some((url) => url.includes('/search/query'))).toBe(false);
+  });
+
   it('answers .catalog with totals and the busiest metrics', async () => {
     const catalog = fakeCatalog();
     const transport = vi.fn(async () => EMPTY_NDJSON);

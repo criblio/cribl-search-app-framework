@@ -48,6 +48,8 @@
  * whose context this lands in for the rest of the session.
  */
 
+import { apiUrl } from './search.js';
+
 /**
  * One authenticated GET against the workspace API, relative to an
  * `/api/v1` base. Injected for the same reason `MetricsTransport` is: a
@@ -140,6 +142,42 @@ export interface MetricsCatalogConfig {
   dataset?: string;
   /** Default cap on projected summary rows. */
   summaryLimit?: number;
+}
+
+const browserCatalogs = new Map<string, MetricsCatalog>();
+
+/**
+ * The catalog client for an app running inside the Cribl iframe.
+ *
+ * Like the default metrics query transport, this uses `CRIBL_API_URL` and
+ * relies on the platform fetch proxy for authentication. Keeping the default
+ * here means every browser app gets working discovery without having to wire
+ * a second client beside `queryInstant` / `createRunMetricsQueryTool`.
+ */
+export function browserMetricsCatalog(
+  opts: Omit<MetricsCatalogConfig, 'transport'> = {},
+): MetricsCatalog {
+  const key = JSON.stringify([
+    opts.group ?? '',
+    opts.engineId ?? '',
+    opts.dataset ?? '',
+    opts.summaryLimit ?? '',
+  ]);
+  const existing = browserCatalogs.get(key);
+  if (existing) return existing;
+  const catalog = createMetricsCatalog({
+    ...opts,
+    transport: async (path, signal) => {
+      const response = await fetch(`${apiUrl().replace(/\/$/, '')}${path}`, { signal });
+      return {
+        status: response.status,
+        ok: response.ok,
+        text: await response.text(),
+      };
+    },
+  });
+  browserCatalogs.set(key, catalog);
+  return catalog;
 }
 
 const DEFAULT_SUMMARY_LIMIT = 40;
