@@ -30,12 +30,13 @@ export {
   type InvestigatorToolCallEntry,
   type InvestigatorErrorEntry,
 } from './InvestigatorTranscript.js';
+export { ResultTable, type ResultTableProps } from './ResultTable.js';
 export {
-  ResultTable,
   inferColumns,
   formatCell,
-  type ResultTableProps,
-} from './ResultTable.js';
+  DEFAULT_MAX_ROWS,
+  DEFAULT_MAX_COLS,
+} from './resultRows.js';
 export {
   decodeCodeBody,
   parseCodeLines,

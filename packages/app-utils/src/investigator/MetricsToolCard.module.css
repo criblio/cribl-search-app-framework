@@ -66,3 +66,33 @@
   font-size: var(--cds-font-size-xs);
   color: var(--cds-color-fg-subtle);
 }
+
+/* Discovery table. Mirrors the transcript's result table by hand rather
+   than importing its stylesheet — see DiscoveryTable for why crossing
+   that entry-point boundary breaks esm.sh consumers. */
+.table {
+  overflow-x: auto;
+}
+.tableGrid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--cds-font-size-xs);
+  font-family: var(--cds-font-family-mono);
+}
+.tableGrid th,
+.tableGrid td {
+  padding: 4px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--cds-color-border-subtle);
+  white-space: nowrap;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tableGrid th {
+  font-weight: var(--cds-font-weight-semibold);
+  color: var(--cds-color-fg-subtle);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.3px;
+}
