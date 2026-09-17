@@ -43,6 +43,9 @@ jobs:
       - uses: criblio/cribl-search-app-framework/.github/actions/release-build@5c7659bbcbdd0a4ef366f4767bfee70cf5523251
         with:
           registry-token: ${{ github.token }}
+          # `apps package` bumps package.json before packing, so without this
+          # the release would attest an artifact a patch ahead of its own tag.
+          app-version: ${{ github.ref_name }}
       - name: Upgrade validation workspace with exact candidate
         env:
           CRIBL_BASE_URL: ${{ secrets.CRIBL_RELEASE_VALIDATION_BASE_URL }}

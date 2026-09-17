@@ -9,6 +9,14 @@ inputs:
     description: DEPRECATED. Only for an app generated before @criblio moved to npmjs, whose committed .npmrc still routes the scope to npm.pkg.github.com (pass github.token). A current app needs no credential and should omit this.
     required: false
     default: ''
+  app-version:
+    description: >-
+      Exact version to package. A leading `v` is stripped, so a tag name passes straight through.
+      `apps package` INCREMENTS package.json before packing (patch by default), so a release
+      left to the default would attest an artifact one patch ahead of the tag it claims to be.
+      Omit for CI, where the bump is discarded with the checkout.
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -75,7 +83,18 @@ runs:
       run: npm run security:static && npm run audit
     - name: Build candidate exactly once
       shell: bash
-      run: npm run package
+      env:
+        APP_VERSION: ${{ inputs.app-version }}
+        # Pin the packaged version when the caller named one; otherwise let
+        # `apps package` apply its default patch bump.
+      run: |
+        set -euo pipefail
+        if [ -n "$APP_VERSION" ]; then
+          # Accept a tag name directly: `v1.2.3` and `1.2.3` both mean 1.2.3.
+          npm run package -- --version "${APP_VERSION#v}"
+        else
+          npm run package
+        fi
     - name: Inspect candidate and create release evidence
       shell: bash
       run: npm run release:evidence

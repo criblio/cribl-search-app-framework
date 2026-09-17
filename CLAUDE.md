@@ -257,13 +257,64 @@ an app uses to register agents with GoatTown (more valuable now, not less), and
 `cell-workspace` is genuinely generic. The harness was the one piece where
 "shared" meant "shared with a single cell that never upgrades".
 
+### The scaffold contract: `skeleton/` is an overlay, not a fork
+
+The platform scaffolds apps with `npx @cribl/apps create` and keeps them
+current with `apps upgrade`. `skeleton/` is that scaffold plus our
+additions, and it has to stay that way: the previous fork drifted until
+`apps upgrade` could no longer repair it — `vite.config.ts` held the
+watched config files inline rather than in the named
+`WATCHED_CONFIG_FILES` const the live-preview migration edits — and
+backend functions were broken for every generated app until a customer
+reported it.
+
+`apps build` bundles each endpoint and `apps package` ships
+`default/backend.yml` beside the bundles, so **an app that does not run
+both cannot deploy a backend endpoint at all.** Live preview is the
+visible symptom; the artifact is the disease.
+
+**`apps upgrade` cannot police the overlay.** It is VERSION-gated: once
+`cribl.createAppScriptVersion` names the current contract it skips every
+migration without reading a file, so deleting the backend plugins from
+`vite.config.ts` leaves it a clean no-op. Verified that way round.
+`npm run check:scaffold-contract` compares against the assets
+`@cribl/apps` actually ships — plugins invoked, files watched, subpaths
+imported, config templates present, contract marker current — and derives
+all of it at check time, so a new platform plugin fails the build on the
+next `@cribl/apps` bump rather than going quietly stale.
+
+Additions on our side are fine; the rule is "everything the platform
+ships is present", never "nothing else is". `resolve.dedupe` in
+`vite.config.ts` is one such addition and is load-bearing: `app-utils`
+peers on React, and two React copies break hooks at runtime.
+
+Two platform behaviors worth knowing before they surprise you:
+
+- **`apps package` increments `package.json` before packing.** A release
+  left to the default attests an artifact one patch ahead of its own tag,
+  so the release-build action takes an `app-version` input that pins it.
+- **`@cribl/apps` pins esbuild ~0.17**, which carries a moderate
+  dev-server advisory. The skeleton's shipped tree stays strict at `low`
+  and is clean; the dev tree is gated at `high`, because nothing in it
+  reaches the packaged app.
+
 ### @cribl/app-tooling
 
-Node-only commands shared by every consumer app:
+Node-only commands shared by every consumer app. The split with the
+platform CLI is by layer: `@cribl/apps` **produces** the artifact
+(scaffold, build, package, preview plugins) and this package **verifies
+and delivers** it. Four of the five commands consume an archive, which is
+why only the packer was superseded.
 
-- `cribl-app-package` — deterministic Cribl App tgz construction
-- `cribl-app-inspect` — archive shape, manifest, static asset, and
-  optional proxy policy validation: `--require-empty-proxies`, or
+- `cribl-app-package` — **deprecated**; use `apps package`. It cannot
+  ship `config/backend.yml` or the bundles `apps build` produces, so an
+  app with endpoints packs an archive that installs and then 404s. Still
+  works, and stays correct, for apps generated before the contract
+- `cribl-app-inspect` — archive shape, manifest, static asset, backend
+  manifest/bundle correspondence, and optional proxy policy validation.
+  `apps build` and `apps package` run separately, so a manifest can name
+  a bundle nobody built; inspect fails on either direction of that drift.
+  Also `--require-empty-proxies`, or
   `--proxies-manifest <path>` to deep-compare the packaged
   `proxies.yml` against a committed expected manifest (any extra or
   missing domain, path entry, injected header, or timeout fails;
