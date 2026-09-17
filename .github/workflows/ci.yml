@@ -33,6 +33,15 @@ jobs:
       # the wrong registry installs fine here and 404s inside an app GoatTown
       # generates, because esm.sh mirrors npmjs only.
       - run: npm run check:publish-config
+      # skeleton/ is an overlay on the @cribl/apps scaffold, not a fork. The
+      # previous fork drifted until `apps upgrade` could no longer repair it
+      # and backend live preview was broken for every generated app.
+      #
+      # `apps upgrade` cannot police that: it is VERSION-gated, so once the
+      # contract marker is current it skips every migration without reading a
+      # single file — deleting the backend plugins leaves it a clean no-op.
+      # This compares against the assets @cribl/apps actually ships instead.
+      - run: npm run check:scaffold-contract
 
   # Prove a scaffolded app still builds. The skeleton is a template, not a
   # workspace, so nothing above touches it — and it silently rotted through
@@ -69,8 +78,34 @@ jobs:
           sed -i 's/APPNAME/scaffold-ci/g' package.json
           npm install --no-audit --no-fund
           npm run lint
-          npx tsc --noEmit
+          # `tsc -b`, not `--noEmit`: the root is solution-style with
+          # `files: []`, so `--noEmit` walks no project and passes trivially.
+          npx tsc -b
           npm run build
+      # Tie the two halves together: the platform produces the artifact and
+      # our tooling verifies it, so the only thing that proves the seam works
+      # is inspecting a real `apps package` archive. Run against the tooling
+      # in THIS checkout rather than the published one — the archive shape and
+      # the inspector that understands it land in the same commit.
+      - name: Package a scaffolded app and inspect the artifact
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/scaffolded"
+          npm run package
+          artifact=$(ls build/*.tgz | head -1)
+          node --input-type=module -e "
+            import { inspectPack, formatInspection } from '$GITHUB_WORKSPACE/packages/app-tooling/src/inspect.mjs';
+            const report = await inspectPack(process.argv[1], { root: process.cwd() });
+            if (report.endpoints.length === 0) {
+              throw new Error('scaffolded app packaged no backend endpoint; the sample endpoint should be there');
+            }
+            console.log(formatInspection(report));
+          " "$artifact"
+
+      - name: Verify every runtime @criblio range resolves on public npmjs
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/scaffolded"
           # Then ask the PUBLIC registry to satisfy each runtime @criblio
           # range on its own. `npm install` above can pass on a range npmjs
           # cannot satisfy — a lockfile-less install reuses whatever a warm
