@@ -5,3 +5,4 @@ package-build/
 .env
 playwright/.auth/
 test-results/
+backend-build/

@@ -3,8 +3,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readFileSync } from 'node:fs'
 import { join } from 'path'
 import react from '@vitejs/plugin-react'
-// @ts-expect-error app-tooling is a Node-only ESM package without declarations
-import { servePackageTgz } from '@criblio/app-tooling/pack'
+import { servePackageTgz } from '@cribl/apps/package'
+import { backendPreviewPlugin, backendWatchPlugin } from '@cribl/apps/preview'
 
 const packageEndpointPlugin = () => ({
   name: 'vite-plugin-package-endpoint',
@@ -15,20 +15,36 @@ const packageEndpointPlugin = () => ({
   },
 })
 
+// Keep this as a named `WATCHED_CONFIG_FILES` const holding one entry per
+// config file: `apps upgrade`'s live-preview migration reads this exact
+// declaration to add files as the platform grows them. Inlining the paths
+// is what made the migration unable to touch this file before.
+const WATCHED_CONFIG_FILES = ['package.json', 'config/proxies.yml', 'config/policies.yml', 'config/schedules.yml', 'config/backend.yml'];
+const CONFIG_CHANGED_HMR_EVENT = 'cribl:config-changed';
+
+const CONFIG_CHANGED_BRIDGE = `
+import { createHotContext } from '/@vite/client';
+const hot = createHotContext('cribl:config-watcher');
+hot.on('${CONFIG_CHANGED_HMR_EVENT}', (data) => {
+  if (window.parent !== window) {
+    window.parent.postMessage({ type: 'CRIBL_APP_CONFIG_CHANGED', file: data && data.file }, '*');
+  }
+  window.location.reload();
+});
+`;
+
 const injectScriptFromQueryPlugin = () => {
   let initScriptUrl: string | null = null;
   return {
     name: 'inject-script-from-query',
     configureServer(server: ViteDevServer) {
       const root = server.config.root;
-      server.watcher.add([
-        join(root, 'package.json'),
-        join(root, 'config', 'proxies.yml'),
-      ]);
+      const watched = WATCHED_CONFIG_FILES.map((rel) => join(root, rel));
+      server.watcher.add(watched);
       server.watcher.on('change', (file) => {
-        if (file === join(root, 'package.json') || file === join(root, 'config', 'proxies.yml')) {
-          server.ws.send({ type: 'full-reload' });
-        }
+        const idx = watched.indexOf(file);
+        if (idx === -1) return;
+        server.ws.send(CONFIG_CHANGED_HMR_EVENT, { file: WATCHED_CONFIG_FILES[idx] });
       });
     },
     transformIndexHtml(html: string, ctx: IndexHtmlTransformContext): IndexHtmlTransformResult{
@@ -49,6 +65,14 @@ const injectScriptFromQueryPlugin = () => {
         children: `window.CRIBL_APP_ID = '__dev__${appName}';`,
         injectTo: 'head-prepend' as const,
       });
+      if (ctx.server) {
+        tags.push({
+          tag: 'script',
+          attrs: { type: 'module' },
+          children: CONFIG_CHANGED_BRIDGE,
+          injectTo: 'head-prepend' as const,
+        });
+      }
       if (initScriptUrl) {
         tags.push({
           tag: 'script',
@@ -62,14 +86,15 @@ const injectScriptFromQueryPlugin = () => {
 };
 
 export default defineConfig({
-  plugins: [react(), packageEndpointPlugin(), injectScriptFromQueryPlugin()],
+  plugins: [react(), packageEndpointPlugin(), injectScriptFromQueryPlugin(), backendWatchPlugin(), backendPreviewPlugin()],
   base: './',
   resolve: {
     // @criblio/app-utils declares React as a peer dep, so its own tree has
     // no copy. Dedupe points every `react` / `react-dom` import at the
     // consumer's node_modules — without it a second React instance can be
     // resolved for the framework's components, and two Reacts in one page
-    // break hooks at runtime.
+    // break hooks at runtime. Not part of the standard scaffold: it exists
+    // because apps here depend on @criblio/app-utils.
     dedupe: ['react', 'react-dom'],
   },
   server: {
