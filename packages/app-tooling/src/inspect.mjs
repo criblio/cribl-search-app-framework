@@ -4,6 +4,30 @@ import { basename, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { diffProxies, parseProxiesYaml } from './proxies.mjs';
 
+/** Config files `apps package` places under `default/`. Only proxies.yml is
+ *  required — an app that declares no API access, schedules, or endpoints
+ *  simply has no policies/schedules/backend manifest to ship. */
+const DEFAULT_CONFIG = ['proxies.yml', 'policies.yml', 'schedules.yml', 'backend.yml'];
+
+/**
+ * Endpoint bundle paths declared in a packaged `default/backend.yml`.
+ *
+ * `apps package` rewrites each endpoint's `script` from the authored `.ts`
+ * to the built `.js`, relative to `default/`. Parsed by line rather than
+ * with a YAML dependency: the one fact needed here is which bundles the
+ * manifest claims, and that is a flat list of `script:` values.
+ */
+export function backendScripts(yamlText) {
+  const scripts = [];
+  for (const raw of yamlText.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const match = /^-?\s*script:\s*(.+?)\s*$/.exec(line);
+    if (match) scripts.push(match[1].replace(/^['"]|['"]$/g, ''));
+  }
+  return scripts;
+}
+
 const execFileAsync = promisify(execFile);
 
 async function tarText(root, args) {
@@ -33,7 +57,8 @@ export async function inspectPack(
   const files = listing.filter((entry) => !entry.endsWith('/'));
   const unexpected = files.filter((entry) =>
     entry !== 'package.json' &&
-    entry !== 'default/proxies.yml' &&
+    !DEFAULT_CONFIG.some((name) => entry === `default/${name}`) &&
+    !entry.startsWith('default/backend/') &&
     !entry.startsWith('static/'));
   if (unexpected.length > 0) {
     throw new Error(`pack contains unexpected files: ${unexpected.join(', ')}`);
@@ -71,12 +96,38 @@ export async function inspectPack(
       );
     }
   }
+  // The backend manifest and its bundles ship together or not at all: the
+  // platform fuses each endpoint from the file `script` names, so a manifest
+  // pointing at a bundle that never got built is an app that installs and
+  // then 404s on its own endpoint. `apps build` runs separately from
+  // `apps package`, so the two really can drift.
+  const endpoints = [];
+  if (files.includes('default/backend.yml')) {
+    const backendYaml = await tarText(rootDir, ['-xOzf', artifact, './default/backend.yml']);
+    for (const script of backendScripts(backendYaml)) {
+      const packed = `default/${script}`;
+      if (!files.includes(packed)) {
+        throw new Error(`backend.yml declares ${script} but the pack has no ${packed}`);
+      }
+      endpoints.push(script);
+    }
+  }
+  const orphans = files.filter(
+    (entry) => entry.startsWith('default/backend/') && !endpoints.includes(entry.slice('default/'.length)),
+  );
+  if (orphans.length > 0) {
+    throw new Error(`pack ships backend bundles no manifest declares: ${orphans.join(', ')}`);
+  }
+
   if (!files.some((entry) => /^static\/assets\/.*\.js$/.test(entry))) {
     throw new Error('pack contains no compiled JavaScript asset');
   }
-  return { artifact, files, manifest, proxies };
+  return { artifact, files, manifest, proxies, endpoints };
 }
 
 export function formatInspection(report) {
-  return `Pack inspection passed: ${basename(report.artifact)} (${report.files.length} files)`;
+  const endpoints = report.endpoints?.length
+    ? `, ${report.endpoints.length} backend endpoint${report.endpoints.length === 1 ? '' : 's'}`
+    : '';
+  return `Pack inspection passed: ${basename(report.artifact)} (${report.files.length} files${endpoints})`;
 }
