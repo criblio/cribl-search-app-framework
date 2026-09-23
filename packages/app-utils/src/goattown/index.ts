@@ -48,11 +48,14 @@ export {
   type ObserveOptions,
   type ObserveResult,
 } from './observe.js';
+/** Lives in `investigator/` — it reads transcript entries and has nothing
+ *  to do with the session transport — and is re-exported here so a consumer
+ *  of this module needs one import. */
 export {
   conclusionFromEntries,
   type Conclusion,
   type ConclusionSource,
-} from './conclusion.js';
+} from '../investigator/conclusion.js';
 export {
   SessionDiagnostics,
   redact,

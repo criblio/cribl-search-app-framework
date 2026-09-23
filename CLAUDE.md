@@ -197,7 +197,9 @@ Three rules, each of which has already cost a consumer a debugging session:
   concludes with a report tool puts the verdict in the tool RESULT.
   `conclusionFromEntries` reads report and summary payloads first and
   assistant prose second; a hand-rolled scan of assistant entries returns
-  empty exactly when the agent behaved correctly.
+  empty exactly when the agent behaved correctly. It lives in
+  `@cribl/app-utils/investigator` — the mistake is not transport-specific —
+  and is re-exported here.
 - **No credential belongs in the browser.** The platform proxy injects the
   app credential for domains declared in `config/proxies.yml` and strips
   any `authorization` the page sets, so APM's historical
