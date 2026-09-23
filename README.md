@@ -13,12 +13,23 @@ For metric queries, result types and response compatibility, see
 # Clone the skeleton to start a new app
 cp -r skeleton/ ~/local/src/my-new-app/
 cd ~/local/src/my-new-app/
-# Replace APPNAME in package.json
-npm install
+# Replace APPNAME in package.json and package-lock.json
+npm ci
 cp .env.example .env
 # Edit .env with your Cribl Cloud credentials
 npm run dev
 ```
+
+The template includes a tested `package-lock.json`, so a fresh app can install
+without resolving hundreds of version ranges first. The app owns this lockfile;
+use normal `npm install <package>` or `npm update` commands to change dependencies
+and commit both files. No template packages are bundled into GoatTown's image.
+
+Template maintainers update the manifest and lockfile together. To refresh the
+resolved versions without installing packages, run
+`npm --prefix skeleton update --package-lock-only --ignore-scripts --no-audit --no-fund`.
+Weekly dependency PRs keep the template current, and the scaffold CI job verifies
+its exact graph with `npm ci`, lint, TypeScript, build and packaging.
 
 ## Packages
 

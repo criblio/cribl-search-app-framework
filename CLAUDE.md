@@ -18,17 +18,14 @@ inside the Cribl Search sandboxed iframe).
 ## Creating a new app
 
 1. Copy the `skeleton/` directory to a new repo.
-2. Find-replace `APPNAME` with your app name in `package.json`.
-3. Run `npm install`. Nothing else — the `@criblio` packages are on
-   npmjs, publicly, so there is no `.npmrc`, no token, and no scope
-   routing. Don't reintroduce any of it: the skeleton's dependency
-   ranges have to be resolvable by a plain public `npm install`,
-   because **an app GoatTown generates never runs npm at all** — its
-   `build_app` rewrites each bare import to
-   `https://esm.sh/<name>@<range>`, and esm.sh mirrors npmjs only.
-   Any range the skeleton pins that npmjs cannot satisfy is a 404 at
-   bundle time, and `npm install` here will not tell you
-   (see "Version ranges" below).
+2. Find-replace `APPNAME` with your app name in `package.json` and
+   `package-lock.json`.
+3. Run `npm ci` to install the template's tested graph. The `@criblio`
+   packages are public on npmjs; no `.npmrc`, token or scope routing is
+   needed. Native GoatTown runs this install inside its workspace sandbox.
+   The app owns the lockfile: update dependencies with normal npm commands
+   and commit both manifest and lockfile changes. Keep the template's lockfile
+   current in this repository; it is independent of GoatTown's development image.
 4. Copy `.env.example` to `.env` and fill in your Cribl Cloud
    credentials.
 5. Optional: `scripts/cribl-mcp.sh start` to run the Cribl MCP
