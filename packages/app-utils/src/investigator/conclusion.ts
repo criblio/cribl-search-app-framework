@@ -15,7 +15,7 @@
 import type {
   InvestigatorTranscriptEntry,
   InvestigatorToolCallEntry,
-} from '../investigator/InvestigatorTranscript.js';
+} from './InvestigatorTranscript.js';
 
 /** Where a conclusion was found. Callers surface this in diagnostics: "no
  *  answer" and "answer from prose" are different problems. */

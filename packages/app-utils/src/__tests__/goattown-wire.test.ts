@@ -12,7 +12,7 @@ import {
   readEventCollection,
   wireEventToLoopEvent,
 } from '../goattown/wire.js';
-import { conclusionFromEntries } from '../goattown/conclusion.js';
+import { conclusionFromEntries } from '../investigator/conclusion.js';
 import { applyLoopEvent, type InvestigatorTranscriptEntry } from '../investigator/InvestigatorTranscript.js';
 
 const DACHSHUND = {

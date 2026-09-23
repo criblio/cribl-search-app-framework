@@ -693,16 +693,21 @@ export function applyLoopEvent(
       const next = prev.slice();
       const entry = next[lastIdx] as InvestigatorAssistantEntry;
 
-      // If a SummaryCard was already rendered in this transcript
-      // (from a real tool call), the agent sometimes ALSO writes a
-      // redundant markdown dump starting with "## Findings". Drop
-      // the entire assistant message in that case — the card is
-      // the canonical rendering.
+      // If a conclusion card was already rendered from a real tool call,
+      // the agent sometimes ALSO writes a redundant markdown dump starting
+      // with "## Findings". Drop the whole assistant message in that case —
+      // the card is the canonical rendering.
+      //
+      // Keyed on the PAYLOAD kind, not the tool name. This used to require
+      // `present_investigation_summary`, which the framework cannot know a
+      // host will use: a server-side agent concluding with `kind: 'report'`
+      // rendered the card AND the dump, because the guard did not recognize
+      // either the name or the kind. The renderer has understood 'report'
+      // since 0.8.6; this is the reducer catching up.
       const hasRenderedSummary = next.some(
         (e) =>
           e.kind === 'toolCall' &&
-          e.call.function.name === 'present_investigation_summary' &&
-          e.result?.ui?.kind === 'summary',
+          (e.result?.ui?.kind === 'summary' || e.result?.ui?.kind === 'report'),
       );
       const looksLikeRedundantSummary =
         hasRenderedSummary &&
@@ -769,15 +774,45 @@ export function applyLoopEvent(
       ];
     }
     case 'toolResult': {
-      return prev.map((e) => {
+      const ui = ev.result.ui;
+      // Any card kind can carry an `error` field (search, trace, …) — mark
+      // the entry errored so the card styles it.
+      const uiError = ui?.error;
+      const hasError = typeof uiError === 'string' && uiError.length > 0;
+      const status: InvestigatorToolCallEntry['status'] = hasError ? 'error' : 'done';
+
+      let matched = false;
+      const next = prev.map((e) => {
         if (e.kind !== 'toolCall' || e.call.id !== ev.result.id) return e;
-        const ui = ev.result.ui;
-        // Any card kind can carry an `error` field (search, trace,
-        // …) — mark the entry errored so the card styles it.
-        const uiError = ui?.error;
-        const hasError = typeof uiError === 'string' && uiError.length > 0;
-        return { ...e, status: hasError ? 'error' : 'done', result: ev.result };
+        matched = true;
+        return { ...e, status, result: ev.result };
       });
+      if (matched) return next;
+
+      // No call carries this id. That used to return the transcript
+      // unchanged, which discarded the result in silence — the call entry
+      // sat at `running` forever and the answer inside the result never
+      // rendered anywhere. A transport whose fallback ids do not match the
+      // ones it sent produces exactly this, and nothing on screen says so.
+      //
+      // Synthesize an entry instead. The result carries its own name and
+      // ui, which is everything a card needs, so the content reaches the
+      // reader even though its call went missing.
+      return [
+        ...next,
+        {
+          kind: 'toolCall',
+          id: `orphan-${ev.result.id || ev.result.name}`,
+          turnId: ev.turnId,
+          call: {
+            id: ev.result.id,
+            function: { name: ev.result.name, arguments: '{}' },
+          },
+          needsApproval: false,
+          status,
+          result: ev.result,
+        },
+      ];
     }
     case 'notification':
     case 'done':
