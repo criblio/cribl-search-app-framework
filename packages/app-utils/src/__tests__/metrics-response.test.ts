@@ -41,6 +41,23 @@ describe('synchronous metrics responses', () => {
     expect(transport).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['running', 'completed'])('retains all range samples when the %s summary undercounts', async (status) => {
+    // A live grouped range query returned 133 series x 61 samples despite a
+    // smaller totalEventCount, even with isFinished:true/status:completed.
+    const body = RANGE.replace('"totalEventCount":3', '"totalEventCount":2')
+      .replace('"running"', JSON.stringify(status))
+      .replace('"isFinished":false', `"isFinished":${status === 'completed'}`);
+    const transport = async () => body;
+    expect(await queryRange('m', { step: 60, transport })).toEqual([
+      { labels: { outcome: 'completed' }, points: [{ t: 100, v: 6 }, { t: 160, v: 8 }] },
+      { labels: { outcome: 'failed' }, points: [{ t: 100, v: 2 }] },
+    ]);
+    const result = await createRunMetricsQueryTool({ transport })(toolCall(60));
+    const ui = result.ui as MetricsQueryUi;
+    expect(ui.error).toBeUndefined();
+    expect(ui.series?.reduce((count, series) => count + series.points.length, 0)).toBe(3);
+  });
+
   it.each([undefined, 60])('returns usable agent results for step %s', async (step) => {
     const tool = createRunMetricsQueryTool({ transport: async () => step ? RANGE : INSTANT });
     const result = await tool(toolCall(step));
