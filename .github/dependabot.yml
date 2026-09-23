@@ -1,0 +1,9 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /skeleton
+    schedule:
+      interval: weekly
+    groups:
+      template-dependencies:
+        patterns: ["*"]

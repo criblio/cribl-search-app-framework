@@ -73,10 +73,10 @@ jobs:
           set -euo pipefail
           cp -R skeleton "$RUNNER_TEMP/scaffolded"
           cd "$RUNNER_TEMP/scaffolded"
-          # The skeleton ships no lockfile (a template can't pin what the
-          # app will resolve), so this is `npm install`, not `npm ci`.
-          sed -i 's/APPNAME/scaffold-ci/g' package.json
-          npm install --no-audit --no-fund
+          # Install the reviewed template graph. npm ci also rejects a stale
+          # manifest/lock pair instead of silently resolving every new app.
+          sed -i 's/APPNAME/scaffold-ci/g' package.json package-lock.json
+          npm ci --ignore-scripts --no-audit --no-fund
           npm run lint
           # `tsc -b`, not `--noEmit`: the root is solution-style with
           # `files: []`, so `--noEmit` walks no project and passes trivially.
