@@ -234,3 +234,191 @@ export interface SessionStatusResponse {
    *  compaction and has not needed it. */
   compactions?: number;
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Session execution receipts (capability `session-execution`)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * Durable record of one accepted request.
+ *
+ * Exists because no session status proves a request finished. `idle` means
+ * "between turns" and is reachable before the answer as well as after it;
+ * `assistantDone` ends one assistant message, and a single request may span
+ * several tool/model rounds. A consumer that waits for either returns an
+ * empty answer that looks like a successful one.
+ *
+ * `finalSeq` is the transcript cursor the terminal states commit with, so a
+ * caller can tell whether it has actually consumed the response. `failed`
+ * and `stopped` carry it too — diagnostics are part of the outcome and are
+ * drained the same way.
+ */
+export interface SessionExecution {
+  requestId: string;
+  state: 'queued' | 'running' | 'complete' | 'failed' | 'stopped';
+  acceptedAt: number;
+  finalSeq: number | null;
+}
+
+/** Receipt states that will not change again. */
+export type TerminalExecutionState = 'complete' | 'failed' | 'stopped';
+
+/** Has this receipt reached its final state? A terminal receipt still needs
+ *  its events drained through `finalSeq` before the outcome is reported. */
+export function isTerminalExecution(execution: SessionExecution): boolean {
+  return execution.state === 'complete'
+    || execution.state === 'failed'
+    || execution.state === 'stopped';
+}
+
+/**
+ * Is the response for this receipt fully consumed?
+ *
+ * Both halves are required. A terminal state alone means the service is
+ * finished writing, not that the caller has read what it wrote; a cursor at
+ * `finalSeq` alone can coincide before the request completes.
+ */
+export function isExecutionDrained(execution: SessionExecution, cursor: number): boolean {
+  if (!isTerminalExecution(execution)) return false;
+  return execution.finalSeq == null || cursor >= execution.finalSeq;
+}
+
+/** Receipt returned by POST /investigations. `requestId` is the literal
+ *  string `initial` for the session-creating request. */
+export interface CreateSessionReceipt {
+  id: string;
+  title?: string;
+  requestId: string;
+}
+
+/** Receipt returned by POST /investigations/:id/messages. HTTP 200 means the
+ *  request started; 202 means it was queued behind the current turn. */
+export interface SendMessageReceipt {
+  ok: true;
+  requestId: string;
+  pending?: boolean;
+}
+
+/**
+ * `execution` as it appears on /status and /events.
+ *
+ * `null` is load-bearing and must never be read as success: it means the
+ * session predates receipt tracking or the server does not implement it.
+ */
+export interface WithExecution {
+  execution?: SessionExecution | null;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Event windows
+// ─────────────────────────────────────────────────────────────────
+
+/** Combined GET /status?eventsSince=N. Absent when no cursor was requested,
+ *  and absent on a server that does not carry events on this route — which
+ *  is the signal to read /events instead and keep reading it. */
+export interface SessionEventWindow {
+  since: number;
+  frames: Array<{ seq: number; ev: WireLoopEvent }>;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Agent image readiness (capability `agent-image-readiness`)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * Configuration-level readiness for image input. Discovery only: no provider
+ * call is made, so `providerVerified` is always false.
+ *
+ * `unknown` is a real answer, not a soft no. An agent overriding the model
+ * cannot be confirmed vision-capable from configuration alone, and reporting
+ * that as `unavailable` would hide a working setup.
+ */
+export interface AgentImageReadiness {
+  state: 'ready' | 'unavailable' | 'unknown';
+  model: string | null;
+  source: 'tenant' | 'cell';
+  reason: string;
+  providerVerified: false;
+  sessionCheck: string;
+}
+
+/** A row of GET /agents. */
+export interface AgentCatalogRow {
+  slug: string;
+  displayName?: string;
+  description?: string;
+  imageReadiness?: AgentImageReadiness;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Session LLM (GET /investigations/:id/workspace/llm)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * `effective.vision` is the send preflight: it decides whether this session
+ * accepts images at all. It is still only configuration — an actual image
+ * probe is what verifies the model understands one.
+ */
+export interface SessionLlmSettings {
+  override: { model: string | null; maxTokens: number | null };
+  effective: { model: string; maxTokens: number | undefined; vision: boolean } | null;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Configuration proposals (GET /protocol → proposalScope)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * The proposal scope a credential is assigned.
+ *
+ * `producerInput: 'credential'` is the whole point: the producer comes from
+ * the credential, so proposal YAML must NOT carry a `producer` field and no
+ * second token belongs in the browser. Activation is a human action at
+ * `reviewPath`; nothing here activates anything.
+ */
+export interface AppConfigurationScope {
+  appConnectionId: string;
+  appId: string;
+  producer: string;
+  producerInput: 'credential';
+  reviewPath: string;
+}
+
+/** GET /protocol. Capability strings are open — an older consumer must
+ *  ignore names it does not know rather than reject the response. */
+export interface ProtocolResponse {
+  protocolVersion: number;
+  compatibleProtocolVersions?: number[];
+  capabilities: string[];
+  sessionEvents?: unknown;
+  sessionExecution?: unknown;
+  agentImageReadiness?: unknown;
+  imageInput?: ImageInputContract;
+  proposalScope?: AppConfigurationScope | null;
+}
+
+/** Advertised image ceilings. Limits count BASE64 CHARACTERS, not decoded
+ *  bytes — validating against byte counts accepts payloads the service
+ *  rejects. */
+export interface ImageInputContract {
+  transport: string;
+  field: string;
+  mimeTypes: string[];
+  maxImages: number;
+  maxBase64CharsPerImage: number;
+  historyMessages?: number;
+  maxInlineBase64Chars: number;
+}
+
+/** Fallback ceilings for a server that advertises no `imageInput`. Matches
+ *  the service defaults at the time of writing; the advertised contract wins
+ *  whenever one is available. */
+export const DEFAULT_IMAGE_INPUT: ImageInputContract = {
+  transport: 'json-base64',
+  field: 'images',
+  mimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+  maxImages: 4,
+  maxBase64CharsPerImage: 4 * 1024 * 1024,
+  historyMessages: 3,
+  maxInlineBase64Chars: 10 * 1024 * 1024,
+};

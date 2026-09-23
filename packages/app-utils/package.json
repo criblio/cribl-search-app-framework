@@ -1,6 +1,6 @@
 {
   "name": "@criblio/app-utils",
-  "version": "0.8.6",
+  "version": "0.8.7",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -23,6 +23,8 @@
     "./openapi-digest.json": "./dist/openapi-digest.json",
     "./investigator": "./dist/investigator/index.js",
     "./investigator/metrics-tool-card": "./dist/investigator/MetricsToolCard.js",
+    "./goattown": "./dist/goattown/index.js",
+    "./goattown/proposal-panel": "./dist/goattown/ProposalPanel.js",
     "./resilience-boundary": "./dist/ResilienceBoundary.js",
     "./auth": "./dist/auth.js",
     "./settings": "./dist/settings.js",
@@ -101,5 +103,8 @@
   "files": [
     "dist",
     "src"
-  ]
+  ],
+  "dependencies": {
+    "@criblio/agent-protocol": "^0.4.2"
+  }
 }

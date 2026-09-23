@@ -1,0 +1,42 @@
+.panel {
+  padding: var(--cds-space-md) var(--cds-space-lg);
+  background: var(--cds-color-bg);
+  border: 1px solid var(--cds-color-border-subtle);
+  border-radius: var(--cds-radius-md);
+}
+.title {
+  font-size: var(--cds-font-size-md);
+  font-weight: var(--cds-font-weight-semibold);
+  margin-bottom: var(--cds-space-xs);
+}
+.body {
+  font-size: var(--cds-font-size-sm);
+  color: var(--cds-color-fg-subtle);
+  line-height: 1.5;
+}
+.meta {
+  margin-top: var(--cds-space-sm);
+  font-family: var(--cds-font-family-mono);
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-fg-subtle);
+}
+.actions {
+  display: flex;
+  gap: var(--cds-space-sm);
+  margin-top: var(--cds-space-md);
+}
+.error {
+  margin-top: var(--cds-space-sm);
+  padding: var(--cds-space-sm);
+  border-left: 3px solid var(--cds-color-error);
+  background: var(--cds-color-bg-subtle);
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-error);
+}
+.waiting {
+  margin-top: var(--cds-space-sm);
+  padding: var(--cds-space-sm);
+  border-left: 3px solid var(--cds-color-accent);
+  background: var(--cds-color-bg-subtle);
+  font-size: var(--cds-font-size-sm);
+}

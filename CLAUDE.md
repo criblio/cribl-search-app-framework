@@ -175,6 +175,50 @@ session can approve, and the bearer's own permissions bound the damage.
 Its guarantee is narrow and worth keeping: no write happens without a
 person deciding.
 
+**GoatTown session client** (`@cribl/app-utils/goattown`,
+`/goattown/proposal-panel`)
+
+The shared client for a GoatTown session service: `GoatTownClient`
+(create/send/observe/lifecycle), `observeSession`, `conclusionFromEntries`,
+typed `GoatTownError`, `SessionDiagnostics`, and the provisioning helpers.
+Wire types live in `@criblio/agent-protocol`, which the service imports too
+— that shared dependency is what stops the two sides drifting.
+
+Three rules, each of which has already cost a consumer a debugging session:
+
+- **`idle` is not completion.** It means "between turns" and is reached
+  before the first answer as well as after the last, so a consumer that
+  stops on idle returns an empty answer that parses downstream as a real
+  one. Completion is a terminal `execution` receipt AND a local cursor that
+  has reached its `finalSeq` — `assistantDone` ends one assistant *message*,
+  not a request, and one request can span several tool/model rounds. A
+  `null` execution means legacy or untracked, never success.
+- **The conclusion is often not in an assistant message.** An agent that
+  concludes with a report tool puts the verdict in the tool RESULT.
+  `conclusionFromEntries` reads report and summary payloads first and
+  assistant prose second; a hand-rolled scan of assistant entries returns
+  empty exactly when the agent behaved correctly.
+- **No credential belongs in the browser.** The platform proxy injects the
+  app credential for domains declared in `config/proxies.yml` and strips
+  any `authorization` the page sets, so APM's historical
+  `kv.sharedCellToken` bought no access and leaked a long-lived secret.
+  `assertNoBrowserCredential` throws rather than warns.
+
+Provisioning follows the same shape: the producer comes from the credential
+(`proposalScope.producerInput: 'credential'`), so proposal YAML must omit a
+top-level `producer:` or the service rejects it with `producer_mismatch`.
+`stageProposal` validates before storing — a store writes an immutable
+revision, so a malformed proposal that skips validation leaves a permanent
+bad revision in the tenant's history. Activation is always human;
+`openReviewPage` opens the review tab with the opener severed.
+
+Image sends are validated locally against the ceilings `/protocol`
+advertises. Those count **base64 characters, not decoded bytes** — checking
+byte counts accepts payloads ~33% over the real ceiling, which then fail
+server-side after the whole upload. A 422 `image_input_unavailable` is
+surfaced, never retried as text: resending without the attachments produces
+a confident answer about an image the model never saw.
+
 **Saved-search provisioner** (`@cribl/app-utils/provisioner`)
 
 - `reconcile(http, config)` / `planOnly(http, config)` — diff the
@@ -320,7 +364,16 @@ why only the packer was superseded.
   missing domain, path entry, injected header, or timeout fails;
   an empty manifest is equivalent to `--require-empty-proxies`)
 - `cribl-app-deploy` — exact-artifact upload, server preinstall policy,
-  idempotent install/upgrade without force, and optional provisioning
+  idempotent install/upgrade without force, and optional provisioning.
+  `POST /api/v1/apps` has been seen returning 500 `UnknownError` *after*
+  committing, so an install error is reconciled by reading the installed
+  record back rather than retried — a blind repeat is a second mutation
+  whose first attempt may have succeeded. The reconciliation only claims
+  success where the version proves it (absent→installed, or an upgrade that
+  moved the version). A same-version redeploy is skipped and reported as
+  unconfirmable: the platform exposes no installed artifact digest or
+  operation receipt, so same-version records are indistinguishable and only
+  a version bump is certain.
 - `cribl-app-release-evidence` — checksum, source/framework metadata,
   and deterministic production CycloneDX SBOM
 - `cribl-app-security` — SHA-pinned Action, dependency-license, and

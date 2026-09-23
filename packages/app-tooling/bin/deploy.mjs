@@ -17,8 +17,18 @@ try {
     requireNoPolicies: args.includes('--require-no-policies'),
     provision: !args.includes('--no-provision'),
   });
-  const unchanged = result.installed?.unchanged ? ' (already installed)' : '';
-  console.log(`Deployment passed${unchanged}: ${result.artifact}`);
+  // An ambiguous install is reported loudly and still exits 0: the expected
+  // version IS installed, so failing the run would be wrong — but printing
+  // only the success line would hide the one fact the operator needs.
+  if (result.installed?.warning) {
+    console.error(`WARNING: ${result.installed.warning}`);
+  }
+  const note = result.installed?.unchanged
+    ? ' (already installed)'
+    : result.installed?.reconciled
+      ? ' (reconciled after an ambiguous install response)'
+      : '';
+  console.log(`Deployment passed${note}: ${result.artifact}`);
 } catch (error) {
   console.error(`Deployment failed: ${error.message}`);
   process.exit(1);
