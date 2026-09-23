@@ -50,4 +50,17 @@ export {
   type CodeResultUi,
   type CodeLine,
 } from './codeResult.js';
+/**
+ * Read the agent's final answer out of a transcript.
+ *
+ * Here rather than only in the GoatTown client because the mistake it
+ * prevents is not transport-specific: when an agent concludes by calling a
+ * report or summary tool, the verdict is in the tool RESULT, so scanning
+ * assistant entries returns empty exactly when the agent behaved correctly.
+ */
+export {
+  conclusionFromEntries,
+  type Conclusion,
+  type ConclusionSource,
+} from './conclusion.js';
 export { exportAsPng } from './exportInvestigation.js';
