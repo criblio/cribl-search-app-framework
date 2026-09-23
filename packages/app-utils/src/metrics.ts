@@ -182,14 +182,16 @@ async function fetchRows(query: string, opts: MetricsQueryOptions = {}): Promise
     if (!('isFinished' in first) && !('job' in first) && !('totalEventCount' in first)) {
       throw new MetricsQueryError('invalid-response', 'Metrics response is missing its summary or event kind');
     }
-    // The GET returns the entire result. Detect a truncated body even when
-    // truncation happens cleanly between complete JSON lines.
+    // Cribl's summary can undercount the inline samples even with a completed
+    // status (observed: 6,514 advertised, 8,113 valid range samples returned).
+    // Accept all returned events. Fewer than advertised still indicates a
+    // truncated body, including truncation between complete JSON lines.
     if (first.totalEventCount !== undefined) {
       const count = first.totalEventCount;
       if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
         throw new MetricsQueryError('invalid-response', 'Metrics response has an invalid totalEventCount');
       }
-      if (count !== rows.length) {
+      if (count > rows.length) {
         throw new MetricsQueryError('incomplete-response', `Metrics response expected ${count} events but received ${rows.length}`);
       }
     }
