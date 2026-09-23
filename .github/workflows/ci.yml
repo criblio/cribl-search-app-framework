@@ -77,6 +77,10 @@ jobs:
           # manifest/lock pair instead of silently resolving every new app.
           sed -i 's/APPNAME/scaffold-ci/g' package.json package-lock.json
           npm ci --ignore-scripts --no-audit --no-fund
+          # Exercise the documented chart imports in the installed scaffold.
+          # The placeholder page never imports /viz, so it cannot catch missing
+          # optional D3 peers that break the first real dashboard build.
+          cp "$GITHUB_WORKSPACE/scripts/fixtures/scaffold-chart.tsx" src/App.tsx
           npm run lint
           # `tsc -b`, not `--noEmit`: the root is solution-style with
           # `files: []`, so `--noEmit` walks no project and passes trivially.
