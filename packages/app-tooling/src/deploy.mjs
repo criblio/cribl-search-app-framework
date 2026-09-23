@@ -128,28 +128,115 @@ async function preinstallCheck({
   }
 }
 
-export async function installUploadedPack({ baseUrl, token, source, pkg }) {
+/** Read the installed record for this app, or null when absent. */
+async function readInstalled({ baseUrl, token, pkg }) {
   const apps = await apiJson({ baseUrl, token, path: '/apps' });
-  const installed = (apps.items ?? []).find((item) => item.id === pkg.name || item.name === pkg.name);
-  if (installed?.version === pkg.version) {
-    return { items: [installed], count: 1, unchanged: true };
+  return (apps.items ?? []).find((item) => item.id === pkg.name || item.name === pkg.name) ?? null;
+}
+
+/**
+ * Decide what an ambiguous install response actually did.
+ *
+ * `POST /api/v1/apps` has been observed returning HTTP 500
+ * `{"status":"error","message":"UnknownError"}` AFTER committing the
+ * installation — a GET of the app then returns 200. Two wrong reactions
+ * follow from that, and this exists to prevent both:
+ *
+ *  - Treating any subsequent GET 200 as proof of success. A record that was
+ *    already there before this deploy proves only that some version is
+ *    installed, not that ours is.
+ *  - Repeating the POST. It is a mutation whose first attempt may well have
+ *    succeeded, so a blind retry is a second install of unknown effect.
+ *
+ * So reconciliation compares the installed VERSION against the one we meant
+ * to install, and reports honest uncertainty when the version cannot settle
+ * it: a same-version record that existed beforehand is indistinguishable
+ * from one this deploy wrote, unless the platform exposes an artifact digest
+ * or an operation receipt. It does not today — that gap is recorded for the
+ * Cribl install API owner.
+ */
+async function reconcileAmbiguousInstall({ baseUrl, token, pkg, before, error }) {
+  let after = null;
+  try {
+    after = await readInstalled({ baseUrl, token, pkg });
+  } catch (readError) {
+    throw new Error(
+      `Install failed (${error.message}) and the follow-up read also failed ` +
+      `(${readError.message}). The installation state is unknown; check the workspace before retrying.`,
+    );
   }
-  if (installed) {
-    return apiJson({
+  if (!after) {
+    // Nothing installed, so the mutation definitively did not commit. The
+    // one state where retrying is safe — and that is the caller's call.
+    throw new Error(`Install failed and no app is installed: ${error.message}`);
+  }
+  if (after.version !== pkg.version) {
+    throw new Error(
+      `Install failed (${error.message}) and the workspace still has ` +
+      `${pkg.name}@${after.version}, not ${pkg.version}. Nothing was installed by this run.`,
+    );
+  }
+  // The expected version is present. Whether that PROVES this run installed
+  // it depends on what was there beforehand:
+  //
+  //  - absent before      → this run created it. Proven.
+  //  - a different version → this run upgraded it. Proven, because the
+  //                          version changed and nothing else was running.
+  //
+  // A same-version record before and after cannot reach here: that case is
+  // short-circuited as `unchanged` before any mutation. So the reconciliation
+  // is always provable at this point, and the honest uncertainty lives in
+  // that short-circuit instead — see installUploadedPack.
+  return {
+    items: [after],
+    count: 1,
+    reconciled: true,
+    previousVersion: before?.version ?? null,
+    warning:
+      `${pkg.name}@${pkg.version} is installed, but the install call returned an error ` +
+      `(${error.message}). Reconciled by reading the installed record back: it went from ` +
+      `${before ? `${before.version} to ${pkg.version}` : `absent to ${pkg.version}`}. ` +
+      'The install was NOT repeated.',
+  };
+}
+
+export async function installUploadedPack({ baseUrl, token, source, pkg }) {
+  const before = await readInstalled({ baseUrl, token, pkg });
+  if (before?.version === pkg.version) {
+    // Same version already installed, so there is nothing to do — but say
+    // plainly that this does not prove the RUNNING artifact matches the one
+    // just built. The platform exposes no installed artifact digest or
+    // operation receipt, so same-version records are indistinguishable.
+    // Bumping the version is the only way to be certain, and reinstalling
+    // over it blind would be a mutation justified by an assumption.
+    return {
+      items: [before],
+      count: 1,
+      unchanged: true,
+      warning:
+        `${pkg.name}@${pkg.version} is already installed, so nothing was uploaded over it. ` +
+        'The platform exposes no artifact digest, so this does not confirm the installed ' +
+        'artifact is identical to the one just built — bump the version to be certain.',
+    };
+  }
+  const request = before
+    ? {
+        path: `/apps/${encodeURIComponent(pkg.name)}`,
+        method: 'PATCH',
+      }
+    : { path: '/apps', method: 'POST' };
+  try {
+    return await apiJson({
       baseUrl,
       token,
-      path: `/apps/${encodeURIComponent(pkg.name)}`,
-      method: 'PATCH',
+      ...request,
       body: { source, displayName: pkg.displayName, version: pkg.version },
     });
+  } catch (error) {
+    // Never retry here. The request may have committed; see
+    // reconcileAmbiguousInstall.
+    return reconcileAmbiguousInstall({ baseUrl, token, pkg, before, error });
   }
-  return apiJson({
-    baseUrl,
-    token,
-    path: '/apps',
-    method: 'POST',
-    body: { source, displayName: pkg.displayName, version: pkg.version },
-  });
 }
 
 /** Validate and install or upgrade one exact Cribl App candidate without force. */

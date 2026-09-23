@@ -214,3 +214,70 @@ For each page, verify:
 - [ ] Falls back to live queries on non-default ranges
 - [ ] Shows stale-cache indicator when cache is old
 - [ ] Non-destructive refresh (keeps previous data visible)
+
+## Server-side agent sessions (GoatTown)
+
+Use `@criblio/app-utils/goattown`. Do not write a session transport by
+hand — the traps below are the reason this module exists, and each has
+already shipped as a bug in an app that rolled its own.
+
+### Knowing when a request is finished
+
+```ts
+import { GoatTownClient, observeSession, conclusionFromEntries } from '@criblio/app-utils/goattown';
+import { applyLoopEvent } from '@criblio/app-utils/investigator';
+
+const receipt = await client.sendMessage(id, 'is this a hot dog?');
+let entries = [];
+await observeSession(client, id, {
+  requestId: receipt.requestId,
+  onEvent: (ev) => { entries = applyLoopEvent(entries, ev); },
+});
+const answer = conclusionFromEntries(entries);
+```
+
+- **Never stop on `idle`.** It means "between turns" and is reached
+  *before* the first answer as well as after the last one. Stopping there
+  ends observation before the answer arrives, and an empty answer reads
+  downstream as "couldn't tell" while the session looks perfect in
+  GoatTown.
+- **Never stop on `assistantDone`.** It ends one assistant *message*. A
+  single request can span several tool and model rounds.
+- **A terminal receipt is not a consumed one.** The service commits
+  `complete` together with the final events; pages are bounded at 100
+  frames, so the last page routinely arrives after the state flips. Drain
+  until the cursor reaches `finalSeq`.
+- **`execution: null` is not success.** It means legacy or untracked. Fall
+  back to a terminal *session* status — never to `idle`.
+
+### Reading the answer
+
+The verdict is usually **not** in an assistant message. An agent with a
+report tool puts it in the tool RESULT, so scanning assistant entries
+returns `''` exactly when the agent did the recommended thing. Use
+`conclusionFromEntries`, and check `source` before trusting an empty
+result: `'none'` with a non-zero `entryCount` means events arrived and
+none of them was an answer, which is a different bug from no events at
+all.
+
+### Events
+
+Dedupe by service `seq` only — never by `turnId` or text, both of which
+legitimately repeat. `userMessage` is wire-only: render it as the user's
+own bubble and never feed it to `applyLoopEvent`, which has no case for
+it and will drop it silently. Wire `error` carries `message: string` and
+must become a real `Error`, or the error card renders blank.
+
+### Images
+
+Validate before sending; the advertised ceilings count **base64
+characters, not decoded bytes**. A 422 `image_input_unavailable` means the
+session's model has no vision — surface it. Retrying without the images
+produces a confident answer about a picture the model never saw.
+
+### Credentials
+
+None in the browser. The platform proxy injects the app credential for
+domains declared in `config/proxies.yml` and strips any `authorization`
+the page sets, so a stored token adds no access and leaks a secret. If you
+find a `kv.sharedCellToken`-style pattern, delete it.
