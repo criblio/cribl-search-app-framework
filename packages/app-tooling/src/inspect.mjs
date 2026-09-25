@@ -9,6 +9,15 @@ import { diffProxies, parseProxiesYaml } from './proxies.mjs';
  *  simply has no policies/schedules/backend manifest to ship. */
 const DEFAULT_CONFIG = ['proxies.yml', 'policies.yml', 'schedules.yml', 'backend.yml'];
 
+/** Root files `apps package` copies verbatim. README.md is the app's
+ *  customer-facing Marketplace overview — the scaffold ships one and the
+ *  platform's own AGENTS.md documents it as intended to ship — so rejecting
+ *  it failed every app that wrote one, with no opt-out in either the packer
+ *  or this gate. Kept as an explicit list rather than "any root file":
+ *  the point of this check is that nothing arrives in the archive by
+ *  accident. */
+const ROOT_FILES = ['package.json', 'README.md'];
+
 /**
  * Endpoint bundle paths declared in a packaged `default/backend.yml`.
  *
@@ -56,7 +65,7 @@ export async function inspectPack(
     .filter(Boolean);
   const files = listing.filter((entry) => !entry.endsWith('/'));
   const unexpected = files.filter((entry) =>
-    entry !== 'package.json' &&
+    !ROOT_FILES.includes(entry) &&
     !DEFAULT_CONFIG.some((name) => entry === `default/${name}`) &&
     !entry.startsWith('default/backend/') &&
     !entry.startsWith('static/'));

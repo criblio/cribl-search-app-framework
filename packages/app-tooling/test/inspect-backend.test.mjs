@@ -115,12 +115,40 @@ test('rejects a bundle no manifest declares', async () => {
   }
 });
 
+test('accepts the README apps package copies into the archive root', async () => {
+  // `apps package` copies <root>/README.md verbatim, and the platform's own
+  // AGENTS.md calls it the customer-facing Marketplace overview — so it is
+  // intended to ship. Rejecting it failed release:evidence for every app
+  // that wrote one, with no opt-out in the packer or this gate.
+  const fx = await archive({ extra: { 'README.md': '# My App\n' } });
+  try {
+    const report = await inspectPack(fx.artifact, { root: fx.root });
+    assert.ok(report.files.includes('README.md'));
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test('still rejects a file outside the known layout', async () => {
   const fx = await archive({ extra: { 'default/secrets.env': 'TOKEN=1\n' } });
   try {
     await assert.rejects(
       () => inspectPack(fx.artifact, { root: fx.root }),
       /unexpected files: default\/secrets\.env/,
+    );
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test('still rejects an arbitrary root file', async () => {
+  // The widened allow-list names README.md specifically. "Any file at the
+  // root" would let a stray .env or notes.txt into a published archive.
+  const fx = await archive({ extra: { 'notes.txt': 'scratch\n' } });
+  try {
+    await assert.rejects(
+      () => inspectPack(fx.artifact, { root: fx.root }),
+      /unexpected files: notes\.txt/,
     );
   } finally {
     await fx.cleanup();
