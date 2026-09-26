@@ -15,6 +15,8 @@
  */
 import type {
   AgentCatalogRow,
+  AlertTrigger,
+  FireAlertsResult,
   CreateSessionReceipt,
   ImageInputContract,
   ProtocolResponse,
@@ -98,9 +100,23 @@ export class GoatTownClient {
     return this.userId();
   }
 
-  private async headers(extra?: Record<string, string>): Promise<Headers> {
+  /**
+   * Request headers.
+   *
+   * `x-goattown-user` identifies the acting member and is required for
+   * discovery and every session read — sessions are owned per user. Alert
+   * firing is the one route where it does not belong: the sender is a
+   * machine, not a member, and the service deletes the header on that
+   * route anyway. Passing `member: false` keeps the client honest about
+   * which calls carry a member claim rather than sending one everywhere
+   * and relying on the server to ignore it.
+   */
+  private async headers(
+    extra?: Record<string, string>,
+    opts: { member?: boolean } = {},
+  ): Promise<Headers> {
     const headers = new Headers({ accept: 'application/json', ...extra });
-    headers.set('x-goattown-user', await this.userId());
+    if (opts.member !== false) headers.set('x-goattown-user', await this.userId());
     return headers;
   }
 
@@ -142,7 +158,7 @@ export class GoatTownClient {
 
   private async request<T>(
     path: string,
-    init: { method?: string; body?: unknown; signal?: AbortSignal } = {},
+    init: { method?: string; body?: unknown; signal?: AbortSignal; member?: boolean } = {},
   ): Promise<T> {
     const method = init.method ?? 'GET';
     const hasBody = init.body !== undefined;
@@ -154,7 +170,10 @@ export class GoatTownClient {
       response = await this.doFetch(`${this.baseUrl}${path}`, {
         method,
         signal: init.signal,
-        headers: await this.headers(hasBody ? { 'content-type': 'application/json' } : undefined),
+        headers: await this.headers(
+          hasBody ? { 'content-type': 'application/json' } : undefined,
+          { member: init.member },
+        ),
         body: hasBody ? JSON.stringify(init.body) : undefined,
       });
     } catch (error) {
@@ -201,6 +220,53 @@ export class GoatTownClient {
   async listAgents(signal?: AbortSignal): Promise<AgentCatalogRow[]> {
     const data = await this.request<{ agents?: AgentCatalogRow[] }>('/agents', { signal });
     return data.agents ?? [];
+  }
+
+  // ── alerts ───────────────────────────────────────────────────
+
+  /**
+   * Fire alert-triggered investigations.
+   *
+   * Requires the `alerts-fire` capability, which appears in `/protocol`
+   * only after an administrator enables **Allow alert firing** on the
+   * connection. The grant is off by default, including for existing
+   * connections, because an external event can start billable work.
+   * Preflight with {@link canFireAlerts}; never infer permission from a
+   * token's shape, and never fall back to asking for an
+   * installation-wide token.
+   *
+   * Sent WITHOUT the member header: the sender is a machine, not a member.
+   * Discovery and session reads keep theirs.
+   *
+   * **A 202 does not mean work started.** An empty array answers 202 with
+   * `accepted: 0` and starts nothing — which makes it a safe connection
+   * probe — and a retry can correctly accept zero because the events
+   * deduplicated. Read `accepted`, and read `rejected` when present: a row
+   * the service declines is otherwise a silent skip.
+   */
+  async fireAlerts(
+    triggers: AlertTrigger[],
+    signal?: AbortSignal,
+  ): Promise<FireAlertsResult> {
+    const result = await this.request<FireAlertsResult>('/alerts/fire', {
+      method: 'POST',
+      body: triggers,
+      member: false,
+      signal,
+    });
+    // Normalize the count so a caller can compare it without a guard; the
+    // service always sends it, but a missing one must not read as success.
+    return { ...result, accepted: typeof result?.accepted === 'number' ? result.accepted : 0 };
+  }
+
+  /**
+   * Is this credential permitted to fire alerts?
+   *
+   * The capability is the ONLY correct check. It is absent unless the
+   * connection is active and the grant is enabled.
+   */
+  canFireAlerts(signal?: AbortSignal): Promise<boolean> {
+    return this.hasCapability('alerts-fire', signal);
   }
 
   // ── sessions ─────────────────────────────────────────────────

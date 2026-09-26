@@ -75,6 +75,20 @@ export interface SetupState {
 export interface UseSetupOptions {
   /** Agent slug the app requires. Checked exactly; never substituted. */
   agentSlug: string;
+  /**
+   * Capabilities the app cannot run without, checked during verification.
+   *
+   * `alerts-fire` is the one that motivated this: it appears in
+   * `/protocol` only after an administrator enables "Allow alert firing"
+   * on the connection, and that grant is off by default — including for
+   * connections that already exist. An app that fires alerts and does not
+   * check will look fully set up and then 403 on its first real event,
+   * which is the worst moment to discover a missing grant.
+   *
+   * Never infer a capability from a token's shape, and never fall back to
+   * requesting an installation-wide token.
+   */
+  requiredCapabilities?: string[];
   /** The app's bundled configuration. Must omit a top-level `producer:`. */
   buildYaml: () => string;
   /** Default service URL offered before anything is saved. */
@@ -130,8 +144,11 @@ export function useSetup(options: UseSetupOptions): UseSetupResult {
   const {
     agentSlug, buildYaml, defaultServiceUrl = '',
     stateKey = DEFAULT_STATE_KEY, tokenKey = DEFAULT_TOKEN_KEY,
-    createClient, userId,
+    createClient, userId, requiredCapabilities,
   } = options;
+  // Joined so the callback below can depend on the CONTENTS rather than on
+  // an array identity that changes every render.
+  const capabilityKey = (requiredCapabilities ?? []).join(',');
 
   const [step, setStep] = useState<SetupStep>('loading');
   const [serviceUrl, setServiceUrl] = useState(defaultServiceUrl);
@@ -193,6 +210,24 @@ export function useSetup(options: UseSetupOptions): UseSetupResult {
       return settle('error', describe(err));
     }
     if (!alive.current || mine !== generation.current) return false;
+
+    // Capabilities before configuration: a missing grant is an
+    // administrator action, same as activation, and reporting it here
+    // keeps the user from completing setup only to fail on first use.
+    const required = capabilityKey ? capabilityKey.split(',') : [];
+    if (required.length > 0) {
+      const protocol = await client.protocol().catch(() => null);
+      if (!alive.current || mine !== generation.current) return false;
+      const have = new Set(protocol?.capabilities ?? []);
+      const missing = required.filter((name) => !have.has(name));
+      if (missing.length > 0) {
+        return settle('awaiting-activation',
+          `The service does not grant ${missing.join(', ')} to this app connection. `
+          + 'An administrator enables it in Connections → Connected apps → Manage connection; '
+          + 'press Re-check afterwards.');
+      }
+    }
+
     setScope(found);
     if (!found) {
       return settle('error',
@@ -224,7 +259,7 @@ export function useSetup(options: UseSetupOptions): UseSetupResult {
         + 'This app requires that agent specifically and will not run against a different one.');
     }
     return settle('ready');
-  }, [agentSlug, clientFor]);
+  }, [agentSlug, clientFor, capabilityKey]);
 
   /** Load public state, then verify. */
   useEffect(() => {

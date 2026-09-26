@@ -94,6 +94,9 @@ export {
  *  drifting. */
 export type {
   AgentCatalogRow,
+  AlertRejection,
+  AlertTrigger,
+  FireAlertsResult,
   AgentImageReadiness,
   AppConfigurationScope,
   CreateSessionReceipt,
@@ -107,6 +110,7 @@ export type {
   WireLoopEvent,
 } from '@criblio/agent-protocol';
 export {
+  ALERT_TRIGGER_LIMITS,
   isExecutionDrained,
   isTerminalExecution,
   isTerminalStatus,
