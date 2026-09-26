@@ -142,3 +142,58 @@ describe('advertised limits', () => {
     });
   });
 });
+
+describe('the protocol cache is a cache, not a constant', () => {
+  it('keeps answering from the first read until refreshed', async () => {
+    // Reported: canFireAlerts() kept returning its cached answer after an
+    // administrator changed the grant. The grant is exactly the thing that
+    // changes while a page is open.
+    let capabilities: string[] = [];
+    const { client, seen } = clientWith(() => json({ protocolVersion: 1, capabilities }));
+
+    expect(await client.canFireAlerts()).toBe(false);
+    capabilities = ['alerts-fire'];                    // administrator enables it
+    expect(await client.canFireAlerts()).toBe(false);  // still the cached answer
+    expect(seen).toHaveLength(1);                      // and no second read
+
+    await client.refreshProtocol();
+    expect(await client.canFireAlerts()).toBe(true);
+    expect(seen).toHaveLength(2);
+  });
+
+  it('sees a revoked grant too, not just a granted one', async () => {
+    let capabilities = ['alerts-fire'];
+    const { client } = clientWith(() => json({ protocolVersion: 1, capabilities }));
+    expect(await client.canFireAlerts()).toBe(true);
+    capabilities = [];
+    await client.refreshProtocol();
+    expect(await client.canFireAlerts()).toBe(false);
+  });
+
+  it('leaves no stale answer behind when the refresh fails', async () => {
+    // The cache is cleared BEFORE the request, so a caller that gets an
+    // error has learned something real rather than silently keeping the
+    // previous capabilities.
+    let fail = false;
+    const { client } = clientWith(() => (fail
+      ? json({ error: 'boom' }, 500)
+      : json({ protocolVersion: 1, capabilities: ['alerts-fire'] })));
+    expect(await client.canFireAlerts()).toBe(true);
+    fail = true;
+    await expect(client.refreshProtocol()).rejects.toBeInstanceOf(GoatTownError);
+    // hasCapability swallows the read failure and reports false rather
+    // than claiming a permission it can no longer confirm.
+    expect(await client.canFireAlerts()).toBe(false);
+  });
+
+  it('refreshes every derived answer, not just capabilities', async () => {
+    let limits = { maxImages: 1 };
+    const { client } = clientWith(() => json({
+      protocolVersion: 1, capabilities: [], imageInput: { ...limits, transport: 'json-base64', field: 'images', mimeTypes: ['image/png'], maxBase64CharsPerImage: 10, maxInlineBase64Chars: 10 },
+    }));
+    expect((await client.imageLimits()).maxImages).toBe(1);
+    limits = { maxImages: 4 };
+    await client.refreshProtocol();
+    expect((await client.imageLimits()).maxImages).toBe(4);
+  });
+});
