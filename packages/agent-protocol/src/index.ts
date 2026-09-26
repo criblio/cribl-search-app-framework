@@ -422,3 +422,71 @@ export const DEFAULT_IMAGE_INPUT: ImageInputContract = {
   historyMessages: 3,
   maxInlineBase64Chars: 10 * 1024 * 1024,
 };
+
+// ─────────────────────────────────────────────────────────────────
+// Alert firing (capability `alerts-fire`)
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * One event POSTed to `/alerts/fire`.
+ *
+ * `eventId` is REQUIRED and must be stable across retries — the service
+ * refuses a row without one rather than inventing it, because both ways of
+ * inventing one fail invisibly. A fresh id per delivery turns exactly-once
+ * into once-per-attempt; a hash of the row's content makes an alert that
+ * fires every five minutes with identical fields dedupe forever, running
+ * once and then never again with nothing to say why.
+ */
+export interface AlertTrigger {
+  /** Agent to run as. Must already be installed and `triggerable`. */
+  agent: string;
+  /** Stable id that retries and overlapping poll windows collapse on. */
+  eventId: string;
+  /** What the session is about, for the index and lifecycle record. */
+  subject: string;
+  /** Groups sessions about the same ongoing problem. */
+  group?: string;
+  /** Prose the seed opens with. Empty means the fields are the whole story. */
+  summary?: string;
+  /**
+   * Remaining fields as evidence. Values are strings because the seed
+   * renders them; a nested object should arrive as its JSON.
+   *
+   * Bounded because the seed is `history[0]` and is re-sent every turn for
+   * the life of the session — an unbounded payload is charged again on
+   * every turn, not just at admission.
+   */
+  fields?: Record<string, string>;
+}
+
+/** Advertised trigger limits, for callers that want to trim before sending. */
+export const ALERT_TRIGGER_LIMITS = {
+  maxFields: 48,
+  maxValueChars: 600,
+  maxSummaryChars: 4_000,
+  maxIdChars: 200,
+} as const;
+
+/** One row the service declined, with the reason. */
+export interface AlertRejection {
+  /** Position in the array that was sent. */
+  index: number;
+  reason: string;
+}
+
+/**
+ * Result of `POST /alerts/fire`.
+ *
+ * **HTTP 202 does not mean work started.** The status says the array was
+ * read, not that any row was admitted: an empty array answers 202 with
+ * `accepted: 0`, and a retry can correctly accept zero because the events
+ * deduplicated. `accepted` is the number that actually started, and
+ * `rejected` explains the rest — a row `parseTrigger` declines is a SILENT
+ * skip in the harness, which is exactly the failure this reporting exists
+ * to prevent.
+ */
+export interface FireAlertsResult {
+  accepted: number;
+  /** Present only when rows were declined. Capped by the service. */
+  rejected?: AlertRejection[];
+}

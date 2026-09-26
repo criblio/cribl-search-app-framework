@@ -14,6 +14,25 @@
 # which is why storing a token in the KV store is supported and safe, while
 # putting one in client code is neither.
 
+# An app that fires alert-triggered investigations must allowlist
+# /alerts/fire alongside its session routes. Firing additionally requires an
+# administrator to enable "Allow alert firing" on the connection — the grant
+# is off by default, including for existing connections, because an external
+# event can start billable work. Check for it at runtime by requiring
+# `alerts-fire` in /protocol.capabilities; never infer it from a token's
+# shape, and never ask for an installation-wide token as a fallback.
+#
+# goattown.example.com:
+#   paths:
+#     allowlist:
+#       - /protocol
+#       - /agents
+#       - /investigations
+#       - /alerts/fire
+#   headers:
+#     inject:
+#       Authorization: '`Bearer ${kv.goattown_token}`'
+
 # api.example.com:
 #   paths:
 #     allowlist:

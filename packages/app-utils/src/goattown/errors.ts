@@ -54,6 +54,19 @@ export class GoatTownError extends Error {
   }
 
   /**
+   * Alert firing is not enabled for this app connection.
+   *
+   * Its own predicate because the remedy is specific and human: an
+   * administrator enables "Allow alert firing" in Connections → Connected
+   * apps. It is NOT a credential problem, so the usual advice — check the
+   * token — sends the operator to the wrong place, and there is no
+   * fallback credential that would work instead.
+   */
+  get isAlertFiringDisabled(): boolean {
+    return this.status === 403 && this.code === 'app_alert_firing_disabled';
+  }
+
+  /**
    * Authentication or authorization failed.
    *
    * Never retried. A missing or rejected credential does not become valid
@@ -62,6 +75,10 @@ export class GoatTownError extends Error {
    * configuration error behind a spinner.
    */
   get isPermanentAuthFailure(): boolean {
+    // Firing being switched off is a permission grant, not a bad
+    // credential. Reporting it as one tells the operator to fix a token
+    // that is already correct.
+    if (this.isAlertFiringDisabled) return false;
     return this.status === 401 || this.status === 403;
   }
 }
