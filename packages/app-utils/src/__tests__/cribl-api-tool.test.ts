@@ -482,3 +482,46 @@ describe('definition', () => {
     expect(def.description).toContain('approvalId');
   });
 });
+
+describe('platform-documented operations and policy filtering', () => {
+  const tinyDigest = {
+    specVersion: 'test',
+    ops: [{ method: 'GET', path: '/apps', operationId: 'listApps', tag: 'apps', summary: 'List apps' }],
+  };
+  const search = async (deps: Parameters<typeof createCriblApiTool>[0]) => {
+    const tool = createCriblApiTool(deps);
+    const result = await tool({ id: '1', name: 'cribl_api', arguments: JSON.stringify({ action: 'search', query: 'kvstore app state' }) });
+    return result.content;
+  };
+
+  it('adds app KV by default, since the spec omits it entirely', async () => {
+    expect(await search({ digest: tinyDigest, request: async () => ({ ok: true, status: 200, text: '{}' }) }))
+      .toContain('/kvstore/{key}');
+  });
+
+  it('marks it as platform-documented, never as a generated spec entry', async () => {
+    expect(await search({ digest: tinyDigest, request: async () => ({ ok: true, status: 200, text: '{}' }) }))
+      .toContain('not in the OpenAPI spec');
+  });
+
+  it('opts out for a caller whose digest is already policy-filtered', async () => {
+    // Reported: adding AFTER the caller filtered re-advertised endpoints
+    // the filter had removed. The request is still denied, but a model
+    // told an endpoint exists keeps trying it.
+    const content = await search({
+      digest: tinyDigest,
+      includePlatformOps: false,
+      request: async () => ({ ok: true, status: 200, text: '{}' }),
+    });
+    expect(content).not.toContain('/kvstore/{key}');
+  });
+
+  it('applies operationFilter to every operation, whatever its origin', async () => {
+    const content = await search({
+      digest: tinyDigest,
+      operationFilter: (op) => op.path.startsWith('/apps'),
+      request: async () => ({ ok: true, status: 200, text: '{}' }),
+    });
+    expect(content).not.toContain('/kvstore/{key}');
+  });
+});

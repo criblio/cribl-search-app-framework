@@ -8,7 +8,7 @@
  * state the app then writes back over whatever was really stored.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { KvError, kvGetJson, kvPutJson, kvPutText, memberKey, parseMemberKey } from '../kv.js';
+import { KvError, isLegacyMemberKey, kvGetJson, kvPutJson, kvPutText, memberKey, parseMemberKey } from '../kv.js';
 import { loadSettings, saveSettings, saveSettingsResult } from '../settings.js';
 
 const API = 'https://api.example/api/v1';
@@ -138,42 +138,33 @@ describe('settings compatibility', () => {
   });
 });
 
-describe('(e) member keys survive hostile ids', () => {
+describe('(e) member keys are router-safe and reversible', () => {
   const hostile = [
-    'plain',
-    'has|pipe',
-    'has/slash',
-    'has~tilde',
-    'has%percent',
-    'all|of/them~at%once',
-    'user@example.com',
-    'a b c',
+    'plain', 'has|pipe', 'has/slash', 'has~tilde', 'has%percent', 'has:colon',
+    'all|of/them~at%once:too', 'user@example.com', 'a b c', 'ünïcödé', '日本語', '💥',
   ];
 
   it.each(hostile)('round-trips %s exactly', (id) => {
-    const key = memberKey('verdicts', id);
-    expect(parseMemberKey(key)).toEqual(['verdicts', id]);
+    expect(parseMemberKey(memberKey('verdicts', id))).toEqual(['verdicts', id]);
   });
 
-  it('never emits a character that would invent a path segment', () => {
-    for (const id of hostile) {
-      const key = memberKey('verdicts', id);
-      expect(key).not.toContain('/');
-      // `%` only ever appears as the start of an escape, never raw.
-      expect(key.replace(/%[0-9A-F]{2}/g, '')).not.toContain('%');
-    }
+  it.each(hostile)('emits only router-safe characters for %s', (id) => {
+    // Measured against live Cribl staging: a key containing a raw `:`
+    // returns an HTML 404 (unmatched route), and so do `%7C` and `%2F`.
+    // Output is therefore restricted to a strict subset of unreserved
+    // path characters rather than to "what encodeURIComponent allows".
+    expect(memberKey('verdicts', id)).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 
-  it('separates parts unambiguously when a part contains the separator', () => {
-    // `:` is the separator because encodeURIComponent ESCAPES it, so it can
-    // never appear raw inside an encoded part. `~` fails this test — it is
-    // unreserved and passes through unescaped — which is why it is not used.
-    expect(parseMemberKey(memberKey('ns', 'ends:', 'next'))).toEqual(['ns', 'ends:', 'next']);
-    expect(parseMemberKey(memberKey('ns', 'has~tilde'))).toEqual(['ns', 'has~tilde']);
+  it('separates parts unambiguously even when a part contains the separator', () => {
+    // Hex cannot emit `-`, so the separator can never appear inside an
+    // encoded part however hostile the input.
+    expect(parseMemberKey(memberKey('ns', 'a-b', 'c-d'))).toEqual(['ns', 'a-b', 'c-d']);
+    expect(parseMemberKey(memberKey('ns', 'm', ''))).toEqual(['ns', 'm', '']);
   });
 
-  it('escapes `|` so it cannot be confused with anything', () => {
-    expect(memberKey('ns', 'a|b')).toBe('ns:a%7Cb');
+  it('carries a version prefix so the shape can change again', () => {
+    expect(memberKey('ns', 'm').startsWith('k1-')).toBe(true);
   });
 
   it('refuses an empty namespace or member id', () => {
@@ -181,14 +172,54 @@ describe('(e) member keys survive hostile ids', () => {
     expect(() => memberKey('ns', '')).toThrow(/member id/);
   });
 
-  it('survives a round trip through a real URL path', () => {
-    // The point of the encoding: the key occupies exactly one path segment
-    // however hostile the member id is.
-    const id = 'all|of/them~at%once';
+  it('rejects a 0.9.0 key rather than reinterpreting it', () => {
+    // 0.9.0 joined percent-encoded parts with `:`. Those keys never
+    // matched the router, so they hold no data — but misreading one is
+    // worse than refusing it.
+    const legacy = 'verdicts:user%40example.com';
+    expect(() => parseMemberKey(legacy)).toThrow(/Not a k1 member key/);
+    expect(isLegacyMemberKey(legacy)).toBe(true);
+    expect(isLegacyMemberKey(memberKey('verdicts', 'user@example.com'))).toBe(false);
+  });
+
+  it('stays one path segment in a real URL', () => {
+    const id = 'all|of/them~at%once:too';
     const key = memberKey('verdicts', id);
-    const url = new URL(`${API}/kvstore/${key}`);
-    const segments = url.pathname.split('/');
-    expect(segments[segments.length - 1]).toBe(key);   // still one segment
+    const segments = new URL(`${API}/kvstore/${key}`).pathname.split('/');
+    expect(segments[segments.length - 1]).toBe(key);
     expect(parseMemberKey(segments[segments.length - 1])).toEqual(['verdicts', id]);
+  });
+});
+
+describe('absence is only the real KV missing-key contract', () => {
+  it('a 403 "User not found" is an error, not absent data', async () => {
+    // The masking defect: /not\s*found/i over any non-OK body reported an
+    // authorization failure as "no value yet", after which the app writes
+    // defaults over a store it was never allowed to read.
+    serve(JSON.stringify({ message: 'User not found' }), {
+      status: 403, headers: { 'content-type': 'application/json' },
+    });
+    await expect(kvGetJson('fixture-key')).rejects.toBeInstanceOf(KvError);
+  });
+
+  it('a 500 mentioning "not found" is an error', async () => {
+    serve(JSON.stringify({ message: 'upstream not found' }), {
+      status: 500, headers: { 'content-type': 'application/json' },
+    });
+    await expect(kvGetJson('fixture-key')).rejects.toMatchObject({ status: 500 });
+  });
+
+  it('only a 404 JSON {message:"Key not found"} is absence', async () => {
+    serve(JSON.stringify({ message: 'Key not found' }), {
+      status: 404, headers: { 'content-type': 'application/json' },
+    });
+    expect(await kvGetJson('fixture-key')).toEqual({ found: false });
+  });
+
+  it('a 404 with a different JSON message is still an error', async () => {
+    serve(JSON.stringify({ message: 'App not found' }), {
+      status: 404, headers: { 'content-type': 'application/json' },
+    });
+    await expect(kvGetJson('fixture-key')).rejects.toBeInstanceOf(KvError);
   });
 });

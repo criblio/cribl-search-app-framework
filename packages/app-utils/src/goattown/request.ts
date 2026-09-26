@@ -26,7 +26,7 @@ import type { SessionExecution } from '@criblio/agent-protocol';
 import { applyLoopEvent, type InvestigatorTranscriptEntry } from '../investigator/transcript.js';
 import { conclusionFromEntries, type Conclusion } from '../investigator/conclusion.js';
 import type { GoatTownClient, MessageImage } from './client.js';
-import type { DiagnosticSink } from './diagnostics.js';
+import { errorKindOf, type DiagnosticSink } from './diagnostics.js';
 import { GoatTownError, MalformedResponseError } from './errors.js';
 import { observeSession, type ObserveResult } from './observe.js';
 
@@ -94,6 +94,11 @@ export interface RunRequestOptions {
   signal?: AbortSignal;
   onEvent?: (entries: InvestigatorTranscriptEntry[]) => void;
   onUserMessage?: (content: string, seq: number, imageCount: number) => void;
+  /**
+   * Controller-level diagnostics: one event when observation starts and
+   * one for the outcome, alongside whatever the client's own sink records.
+   * Pass the same `SessionDiagnostics.sink` to both to get one timeline.
+   */
   onDiagnostic?: DiagnosticSink;
   isHidden?: () => boolean;
 }
@@ -113,7 +118,14 @@ export async function runRequest(
 ): Promise<RequestResult> {
   let entries = opts.entries ?? [];
   let execution: SessionExecution | null = null;
+  // Updated as frames are consumed, NOT only on a clean return — a
+  // transport failure must still hand back the position reached, or the
+  // caller resumes from the start and replays the transcript it already has.
   let cursor = opts.since ?? 0;
+  const note = (extra: Partial<Parameters<DiagnosticSink>[0]>) => opts.onDiagnostic?.({
+    at: Date.now(), op: 'request', method: 'OBSERVE',
+    path: '/investigations/:seg', requestId: opts.requestId, cursor, ...extra,
+  });
 
   const base = (): Omit<RequestResult, 'outcome'> => ({
     requestId: opts.requestId,
@@ -123,6 +135,7 @@ export async function runRequest(
     conclusion: conclusionFromEntries(entries),
   });
 
+  note({});
   let observed: ObserveResult;
   try {
     observed = await observeSession(client, sessionId, {
@@ -136,40 +149,48 @@ export async function runRequest(
         opts.onEvent?.(entries);
       },
       onUserMessage: opts.onUserMessage,
+      onCursor: (seq) => { cursor = seq; },
       onExecution: (next) => { execution = next; },
     });
-    cursor = observed.cursor;
   } catch (error) {
     // A transport failure is not a model answer. Keeping them apart is the
     // difference between "the agent could not tell" and "we never asked".
     if (error instanceof GoatTownError || error instanceof MalformedResponseError) {
+      note({ errorKind: errorKindOf(error) });
+      // `cursor` holds everything consumed before the failure, so the
+      // caller resumes rather than replays.
       return { ...base(), outcome: 'transport-error', error };
     }
     throw error;
   }
 
-  cursor = observed.cursor;
+  cursor = Math.max(cursor, observed.cursor);
   execution = observed.execution;
 
-  if (observed.reason === 'aborted') return { ...base(), outcome: 'aborted' };
-  if (observed.reason === 'stalled') return { ...base(), outcome: 'stalled' };
+  const settle = (outcome: RequestOutcome): RequestResult => {
+    note({ executionState: execution?.state, finalSeq: execution?.finalSeq ?? null });
+    return { ...base(), outcome };
+  };
+
+  if (observed.reason === 'aborted') return settle('aborted');
+  if (observed.reason === 'stalled') return settle('stalled');
   if (observed.reason === 'terminal-status') {
     // No receipt existed. The session reached a terminal status, which is
     // real but weaker evidence than a drained receipt; say so rather than
     // promoting it to `completed`.
-    return { ...base(), outcome: 'untracked' };
+    return settle('untracked');
   }
 
   // reason === 'drained'. The receipt's own state decides the outcome; a
   // drained `failed` is still a failure, however much the transcript holds.
   switch (execution?.state) {
-    case 'complete': return { ...base(), outcome: 'completed' };
-    case 'failed': return { ...base(), outcome: 'failed' };
-    case 'stopped': return { ...base(), outcome: 'stopped' };
+    case 'complete': return settle('completed');
+    case 'failed': return settle('failed');
+    case 'stopped': return settle('stopped');
     default:
       // Drained without a terminal receipt state: the service reported
       // something this version does not understand. Not success.
-      return { ...base(), outcome: 'untracked' };
+      return settle('untracked');
   }
 }
 

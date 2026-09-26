@@ -15,7 +15,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SessionExecution, WireLoopEvent } from '@criblio/agent-protocol';
 import { GoatTownClient } from '../goattown/client.js';
 import { runRequest, sendAndRun } from '../goattown/request.js';
-import { SessionDiagnostics } from '../goattown/diagnostics.js';
+import { SessionDiagnostics, redactUrl } from '../goattown/diagnostics.js';
 import { kvPutText } from '../kv.js';
 import { verdictOf } from '../goattown/example-image-classifier.js';
 
@@ -314,5 +314,109 @@ describe('the worked example', () => {
     expect(verdictOf('not a hot-dog')).toBe('not-hot-dog');
     expect(verdictOf('I cannot tell from this photo.')).toBe('undetermined');
     expect(verdictOf('')).toBe('undetermined');
+  });
+});
+
+describe('release defects reported against 0.9.0', () => {
+  it('keeps the consumed cursor when the transport fails mid-stream', async () => {
+    // Reported: first poll delivers seq1+seq2, second returns 403, and the
+    // result came back with cursor 0 — so resuming replayed the entries
+    // already folded into the transcript.
+    let call = 0;
+    const fetchImpl = vi.fn(async () => {
+      call += 1;
+      if (call === 1) {
+        return new Response(JSON.stringify({
+          status: 'running', latestSeq: 2,
+          eventWindow: { since: 0, frames: [
+            { seq: 1, ev: text('partial answer') },
+            { seq: 2, ev: { kind: 'assistantDone', turnId: 'turn-0' } },
+          ] },
+          execution: exec({ state: 'running', finalSeq: null }),
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ error: 'denied' }), {
+        status: 403, headers: { 'content-type': 'application/json' },
+      });
+    });
+    const client = new GoatTownClient({
+      baseUrl: 'https://svc.example', userId: async () => 'u',
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await runRequest(client, 's1', { requestId: 'r-image', intervalMs: 0 });
+    expect(result.outcome).toBe('transport-error');
+    expect(result.cursor).toBe(2);
+    expect(result.conclusion.text).toBe('partial answer');
+  });
+
+  it('advances the cursor over user-message frames too', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      status: 'idle', latestSeq: 2,
+      eventWindow: { since: 0, frames: [
+        { seq: 1, ev: { kind: 'userMessage', turnId: 'u', content: 'hi' } },
+        { seq: 2, ev: text('answer') },
+      ] },
+      execution: exec({ finalSeq: 2 }),
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const client = new GoatTownClient({
+      baseUrl: 'https://svc.example', userId: async () => 'u',
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await runRequest(client, 's1', { requestId: 'r-image', intervalMs: 0 });
+    expect(result.cursor).toBe(2);
+  });
+
+  it('calls the controller-level onDiagnostic it declares', async () => {
+    // Reported: the option existed and the counter stayed at 0.
+    const events: unknown[] = [];
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      status: 'idle', latestSeq: 1,
+      eventWindow: { since: 0, frames: [{ seq: 1, ev: text('ok') }] },
+      execution: exec({ finalSeq: 1 }),
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const client = new GoatTownClient({
+      baseUrl: 'https://svc.example', userId: async () => 'u',
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+    await runRequest(client, 's1', {
+      requestId: 'r-image', intervalMs: 0, onDiagnostic: (e) => events.push(e),
+    });
+    expect(events.length).toBeGreaterThan(0);
+  });
+
+  it('never persists exception text or URL secrets in diagnostics', async () => {
+    // Reported: a thrown fetch error carrying a token in its message ended
+    // up verbatim in SessionDiagnostics.toText(). Sentinel value, not a
+    // real credential.
+    const SENTINEL = 'CANARY_SENTINEL_NOT_A_REAL_TOKEN';
+    const diagnostics = new SessionDiagnostics();
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError(`network failed for https://example.invalid/?token=${SENTINEL}`);
+    });
+    const client = new GoatTownClient({
+      baseUrl: 'https://svc.example', userId: async () => 'u',
+      fetch: fetchImpl as unknown as typeof fetch,
+      onDiagnostic: diagnostics.sink,
+    });
+    // A network error is transient and retried with backoff, so the run is
+    // aborted rather than awaited to completion.
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 120);
+    await runRequest(client, 's1', {
+      requestId: 'r-image', intervalMs: 0, signal: controller.signal,
+      onDiagnostic: diagnostics.sink,
+    }).catch(() => undefined);
+    const dump = diagnostics.toText();
+    expect(dump).not.toContain(SENTINEL);
+    expect(dump).not.toContain('example.invalid');
+    // The category survives, which is what a reader acts on.
+    expect(dump).toContain('network');
+  });
+
+  it('redacts opaque route segments structurally, not by id shape', () => {
+    // A length/hex heuristic keeps whatever it fails to recognise.
+    expect(redactUrl('/investigations/abc/status?requestId=tok')).toBe('/investigations/:seg/status?requestId=…');
+    expect(redactUrl('/investigations/s1/workspace/llm')).toBe('/investigations/:seg/workspace/llm');
+    expect(redactUrl('/ws-ticket?t=secret')).toBe('/ws-ticket?t=…');
   });
 });

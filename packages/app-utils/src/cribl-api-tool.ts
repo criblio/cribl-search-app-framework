@@ -48,6 +48,7 @@ import {
   searchOperations,
   searchTerms,
   unmatchedTerms,
+  type DigestOp,
   type OpenApiDigest,
   withPlatformOps,
 } from './openapi-digest.js';
@@ -121,10 +122,27 @@ export interface CriblApiResponse {
 }
 
 export interface CriblApiToolDeps {
-  /** The build-time OpenAPI digest to search. Augmented at construction
-   *  with the platform-documented operations the published spec omits (app
-   *  KV), so an agent can discover them at all. */
+  /** The build-time OpenAPI digest to search. */
   digest: OpenApiDigest;
+  /**
+   * Add the platform-documented operations the published spec omits (app
+   * KV). Default true, because the common caller passes the raw digest and
+   * an agent that cannot discover app KV invents a path instead.
+   *
+   * Set false when `digest` has ALREADY been filtered by policy. Adding
+   * afterwards re-advertises endpoints the filter removed — discovery
+   * drift, not an authorization bypass, since the request itself is still
+   * denied, but a model told an endpoint exists will keep trying it. A
+   * caller that wants them within its policy adds
+   * `PLATFORM_DOCUMENTED_OPS` to the digest BEFORE filtering.
+   */
+  includePlatformOps?: boolean;
+  /**
+   * Applied to every operation discovery can surface, platform-documented
+   * or not. The single place to enforce a policy that must hold no matter
+   * where an operation came from.
+   */
+  operationFilter?: (op: DigestOp) => boolean;
   /** Execute a request against the workspace. Should NOT throw on a
    *  non-2xx — a 403 is information the agent should see. */
   request: (
@@ -241,10 +259,17 @@ export function createCriblApiTool(
 ): (call: ToolCallInvocation, signal?: AbortSignal) => Promise<ToolExecutionResult> {
   const maxChars = deps.maxResponseChars ?? DEFAULT_MAX_RESPONSE;
   const newId = deps.newApprovalId ?? (() => crypto.randomUUID());
-  // Augmented once: the published spec omits app KV entirely, so without
+  // Augmented once. The published spec omits app KV entirely, so without
   // this an agent searching for how to persist app state finds nothing and
-  // invents a group-scoped path the proxy cannot serve.
-  const apiDigest = withPlatformOps(deps.digest);
+  // invents a group-scoped path the proxy cannot serve — but a caller that
+  // already filtered its digest by policy opts out, because adding after a
+  // filter undoes it.
+  const augmented = deps.includePlatformOps === false
+    ? deps.digest
+    : withPlatformOps(deps.digest);
+  const apiDigest = deps.operationFilter
+    ? { ...augmented, ops: augmented.ops.filter(deps.operationFilter) }
+    : augmented;
 
   return async (call, signal) => {
     const args = parseArgs<CriblApiArgs>(call.arguments);
