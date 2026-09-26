@@ -92,7 +92,9 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/scaffolded"
-          npm run package
+          version=$(node -p "require('./package.json').version")
+          npm run package -- --version "$version"
+          test "$version" = "$(node -p "require('./package.json').version")"
           artifact=$(ls build/*.tgz | head -1)
           node --input-type=module -e "
             import { inspectPack, formatInspection } from '$GITHUB_WORKSPACE/packages/app-tooling/src/inspect.mjs';

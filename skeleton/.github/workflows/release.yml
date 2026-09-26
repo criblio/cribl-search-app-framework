@@ -20,11 +20,15 @@ jobs:
           test "${GITHUB_REF_NAME#v}" = "$(node -p "require('./package.json').version")"
       # Registry mode — see the note in ci.yml. The SHA pins the action,
       # not a framework source dependency.
-      - uses: criblio/cribl-search-app-framework/.github/actions/release-build@5c7659bbcbdd0a4ef366f4767bfee70cf5523251
+      - uses: criblio/cribl-search-app-framework/.github/actions/release-build@336c59cf1585c26bdd8d1c551ab661693610a03c
         with:
           # `apps package` bumps package.json before packing, so without this
           # the release would attest an artifact a patch ahead of its own tag.
           app-version: ${{ github.ref_name }}
+      - name: Verify packaging preserved the release version
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF_NAME#v}" = "$(node -p "require('./package.json').version")"
       - name: Upgrade validation workspace with exact candidate
         env:
           CRIBL_BASE_URL: ${{ secrets.CRIBL_RELEASE_VALIDATION_BASE_URL }}
