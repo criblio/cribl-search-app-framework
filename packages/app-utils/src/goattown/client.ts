@@ -193,8 +193,23 @@ export class GoatTownClient {
 
   // ── discovery ────────────────────────────────────────────────
 
-  /** GET /protocol, cached for the life of the client. Capabilities do not
-   *  change under a running page, and this is read on several hot paths. */
+  /**
+   * GET /protocol, cached for the life of the client.
+   *
+   * The cache is right for the hot paths that read this on every call —
+   * but it is a CACHE, not a constant. Capabilities absolutely do change
+   * under a running page: an administrator enabling "Allow alert firing"
+   * on a connection adds `alerts-fire`, and revoking it removes the grant,
+   * both without the page reloading. A long-lived client keeps answering
+   * from the first read and a Re-check button silently re-reports the
+   * stale answer.
+   *
+   * So call {@link refreshProtocol} whenever the user is explicitly asking
+   * the question again. Constructing a new client also works, and is what
+   * `useSetup` does by default — but a caller that injects `createClient`
+   * may hand back a shared instance, which is exactly the case the cache
+   * outlives.
+   */
   async protocol(signal?: AbortSignal): Promise<ProtocolResponse> {
     if (this.protocolCache) return this.protocolCache;
     const response = await this.request<ProtocolResponse>('/protocol', { signal });
@@ -202,8 +217,26 @@ export class GoatTownClient {
     return response;
   }
 
+  /**
+   * Discard the cached protocol response and read it again.
+   *
+   * The explicit re-check. Every capability answer derived from
+   * `protocol()` — `hasCapability`, `canFireAlerts`, `imageLimits` —
+   * reflects the refreshed response afterwards.
+   *
+   * The cache is cleared BEFORE the request rather than replaced after it,
+   * so a failed refresh leaves no stale answer behind. A caller that gets
+   * an error here has learned something real; one that silently kept the
+   * previous capabilities would not.
+   */
+  async refreshProtocol(signal?: AbortSignal): Promise<ProtocolResponse> {
+    this.protocolCache = null;
+    return this.protocol(signal);
+  }
+
   /** Does the service advertise a capability? Unknown names are false, never
-   *  an error — a consumer must tolerate a service older than itself. */
+   *  an error — a consumer must tolerate a service older than itself.
+   *  Answers from the cached protocol; see {@link refreshProtocol}. */
   async hasCapability(name: string, signal?: AbortSignal): Promise<boolean> {
     const protocol = await this.protocol(signal).catch(() => null);
     return protocol?.capabilities?.includes(name) ?? false;
@@ -264,6 +297,11 @@ export class GoatTownClient {
    *
    * The capability is the ONLY correct check. It is absent unless the
    * connection is active and the grant is enabled.
+   *
+   * Answers from the cached protocol response. The grant is the thing an
+   * administrator toggles WHILE a page is open, so a long-lived client
+   * must call {@link refreshProtocol} before asking again — otherwise a
+   * Re-check re-reports the answer from before the change.
    */
   canFireAlerts(signal?: AbortSignal): Promise<boolean> {
     return this.hasCapability('alerts-fire', signal);

@@ -197,6 +197,25 @@ export function useSetup(options: UseSetupOptions): UseSetupResult {
     if (!url) return settle('needs-url');
     const client = clientFor(url);
 
+    // Re-read the protocol before anything derived from it. The default
+    // `clientFor` builds a fresh client per verification, so the cache is
+    // already empty — but a caller that injects `createClient` may hand
+    // back a shared instance, and then every capability answer here would
+    // come from whenever that client first asked. The grant this gates on
+    // is precisely what an administrator toggles between two presses of
+    // Re-check.
+    try {
+      await client.refreshProtocol();
+    } catch (err) {
+      if (err instanceof GoatTownError && err.isPermanentAuthFailure) {
+        return settle('needs-credential',
+          'The service rejected this app\'s credential. Save an app token below, or ask an '
+          + 'administrator to deliver one through Connected apps.');
+      }
+      return settle('error', describe(err));
+    }
+    if (!alive.current || mine !== generation.current) return false;
+
     // 1. Authenticated call. A saved URL proves nothing until this passes.
     let found: AppConfigurationScope | null;
     try {
