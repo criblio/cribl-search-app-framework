@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { diffProxies, parseProxiesYaml } from './proxies.mjs';
+import { diffProxies, parseProxiesYaml, validateProxies } from './proxies.mjs';
 
 /** Config files `apps package` places under `default/`. Only proxies.yml is
  *  required — an app that declares no API access, schedules, or endpoints
@@ -88,6 +88,13 @@ export async function inspectPack(
   }
 
   const proxies = await tarText(rootDir, ['-xOzf', artifact, './default/proxies.yml']);
+  // Shape first. A list of `- host:` entries is valid YAML and declares
+  // nothing, so every external call is blocked at runtime and the failure
+  // surfaces as CORS far from its cause.
+  const schemaProblems = validateProxies(parseProxiesYaml(proxies));
+  if (schemaProblems.length > 0) {
+    throw new Error(`packaged proxies.yml is not valid:\n${schemaProblems.map((p) => `  - ${p}`).join('\n')}`);
+  }
   const activeProxyLines = proxies
     .split('\n')
     .map((line) => line.trim())

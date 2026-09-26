@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { inspectPack } from '../src/inspect.mjs';
 import { packageApp } from '../src/pack.mjs';
-import { diffProxies, parseProxiesYaml } from '../src/proxies.mjs';
+import { diffProxies, parseProxiesYaml, validateProxies } from '../src/proxies.mjs';
 
 const FULL_PROXIES = `api.example.com:
   timeout: 10000
@@ -185,4 +185,44 @@ test('diffProxies reports every difference and ignores list order', () => {
     'a.example.com.timeout: server-reported proxies has 1000, expected manifest has 2000',
     'b.example.com: declared in server-reported proxies but not in expected manifest (null)',
   ]);
+});
+
+test('validateProxies rejects the list shape the old skeleton example taught', () => {
+  // Valid YAML, declares nothing, blocks every external call at runtime —
+  // and the failure surfaces as CORS, far from its cause.
+  const problems = validateProxies(parseProxiesYaml(
+    '- host: api.example.com\n  paths:\n    - /v1/\n',
+  ));
+  assert.ok(problems.some((p) => /must be a map keyed by host/.test(p)), problems.join('\n'));
+});
+
+test('validateProxies names the headers.Authorization mistake specifically', () => {
+  const problems = validateProxies(parseProxiesYaml(
+    'api.example.com:\n  headers:\n    Authorization: Bearer x\n',
+  ));
+  assert.ok(problems.some((p) => /headers\.inject/.test(p)), problems.join('\n'));
+});
+
+test('validateProxies accepts the real platform shape', () => {
+  const yaml = [
+    'api.example.com:',
+    '  paths:',
+    '    allowlist:',
+    '      - /v1/',
+    '  headers:',
+    '    inject:',
+    '      Authorization: token',
+    '  timeout: 30000',
+    '  rejectUnauthorized: true',
+  ].join('\n');
+  assert.deepEqual(validateProxies(parseProxiesYaml(yaml)), []);
+});
+
+test('validateProxies accepts an empty declaration', () => {
+  assert.deepEqual(validateProxies(parseProxiesYaml('# nothing declared\n')), []);
+});
+
+test('validateProxies flags a scheme in the host key', () => {
+  const problems = validateProxies(parseProxiesYaml('https://api.example.com:\n  timeout: 1\n'));
+  assert.ok(problems.some((p) => /bare hostname/.test(p)), problems.join('\n'));
 });

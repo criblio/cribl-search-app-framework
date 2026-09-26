@@ -141,12 +141,16 @@ export async function readProposalStatus(
   agentSlug: string,
   signal?: AbortSignal,
 ): Promise<ProposalStatus> {
-  const metadata = await configurationRequest(client, 'metadata', undefined, signal)
-    .catch(() => ({} as Record<string, unknown>));
+  // Failures PROPAGATE. These used to be swallowed into `{}` and `[]`,
+  // which rendered a rejected credential as "no active revision, no
+  // agents" — indistinguishable from "an administrator has not activated
+  // it yet". The user then waits for a person who was never going to fix
+  // it, because the actual problem is that the app cannot authenticate.
+  const metadata = await configurationRequest(client, 'metadata', undefined, signal);
   const active = (metadata as { metadata?: { activeRevisionId?: unknown } }).metadata?.activeRevisionId
     ?? (metadata as { activeRevisionId?: unknown }).activeRevisionId;
   const activeRevisionId = typeof active === 'string' ? active : null;
-  const agents = await client.listAgents(signal).catch(() => []);
+  const agents = await client.listAgents(signal);
   return {
     stagedRevisionId,
     activeRevisionId,
@@ -182,7 +186,19 @@ export function assertProposalOmitsProducer(yaml: string): void {
   }
 }
 
-/** POST/GET /configurations with the action query the service expects. */
+/**
+ * POST/GET /configurations with the action query the service expects.
+ *
+ * Routed through the client's own transport rather than the global
+ * `fetch`. It used to call `fetch` directly, which meant an injected test
+ * transport was ignored and every configuration request was invisible to
+ * `onDiagnostic` — so the one flow a first-run setup depends on was the
+ * one flow with no diagnostics at all.
+ *
+ * It cannot use the client's JSON helper: this endpoint takes
+ * `application/yaml`, which the helper would JSON-encode. `rawRequest`
+ * exists for exactly that.
+ */
 async function configurationRequest(
   client: GoatTownClient,
   action: string,
@@ -191,17 +207,10 @@ async function configurationRequest(
   params: Record<string, string> = {},
 ): Promise<Record<string, unknown>> {
   const query = new URLSearchParams({ action, ...params });
-  // Deliberately not routed through the client's JSON request helper: this
-  // endpoint takes application/yaml and the helper would JSON-encode it.
-  const headers = new Headers({
-    accept: 'application/json',
-    'x-goattown-user': await client.actingUser(),
-  });
-  if (yaml !== undefined) headers.set('content-type', 'application/yaml');
-  const response = await fetch(`${client.baseUrl}/configurations?${query.toString()}`, {
+  const response = await client.rawRequest(`/configurations?${query.toString()}`, {
     method: yaml === undefined ? 'GET' : 'POST',
-    headers,
     body: yaml,
+    contentType: 'application/yaml',
     signal,
   });
   if (!response.ok) throw await errorFromResponse(response);

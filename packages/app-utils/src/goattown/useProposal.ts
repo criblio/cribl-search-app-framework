@@ -62,8 +62,9 @@ export interface UseProposalResult {
   stage: () => Promise<void>;
   /** Open the human review page (new tab, opener severed). */
   review: () => void;
-  /** Re-read activation status. */
-  refresh: () => Promise<void>;
+  /** Re-read activation status. Pass a revision id to check a specific
+   *  one; omit to check whatever is currently staged. */
+  refresh: (revisionOverride?: string | null) => Promise<void>;
 }
 
 export function useProposal(options: UseProposalOptions): UseProposalResult {
@@ -77,18 +78,36 @@ export function useProposal(options: UseProposalOptions): UseProposalResult {
   const alive = useRef(true);
 
   const revisionId = staged?.revisionId ?? persist?.read() ?? null;
+  /** Monotonic request id. Only the newest response is allowed to write
+   *  state — a slow earlier check must not overwrite a newer one, which is
+   *  how a re-check against a corrected URL gets clobbered by the failure
+   *  it was meant to replace. */
+  const generation = useRef(0);
 
-  const refresh = useCallback(async () => {
+  /**
+   * Re-read activation status.
+   *
+   * Takes the revision id as an ARGUMENT rather than reading it from
+   * state. `stage()` used to call this immediately after `setStaged(...)`,
+   * and React state is not updated within the same tick — so the refresh
+   * compared the PREVIOUS revision against the active one and reported the
+   * freshly staged revision as inactive.
+   */
+  const refresh = useCallback(async (revisionOverride?: string | null) => {
+    const mine = ++generation.current;
+    const target = revisionOverride !== undefined ? revisionOverride : revisionId;
     try {
-      const next = await readProposalStatus(client, revisionId, agentSlug);
-      if (!alive.current) return;
+      const next = await readProposalStatus(client, target, agentSlug);
+      if (!alive.current || mine !== generation.current) return;
       setStatus(next);
       // Both conditions: an active revision whose agent never appeared is
       // not a working install, and saying "active" would send the user off
       // to debug the wrong thing.
       setPhase(next.isActive && next.agentAvailable ? 'active' : 'awaiting-activation');
     } catch (err) {
-      if (!alive.current) return;
+      if (!alive.current || mine !== generation.current) return;
+      // A failure here is a real failure — readProposalStatus no longer
+      // swallows auth or network errors into "not active yet".
       setError(messageOf(err));
       setPhase('error');
     }
@@ -132,7 +151,9 @@ export function useProposal(options: UseProposalOptions): UseProposalResult {
       setStaged(result);
       persist?.write(result.revisionId);
       setPhase('awaiting-activation');
-      await refresh();
+      // Explicitly the revision just staged: `staged` has not landed in
+      // state yet, so a bare refresh() would check the previous one.
+      await refresh(result.revisionId);
     } catch (err) {
       if (!alive.current) return;
       setError(messageOf(err));

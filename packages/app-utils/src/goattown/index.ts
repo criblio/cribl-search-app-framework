@@ -20,9 +20,12 @@
  *     the app credential for domains declared in `config/proxies.yml` and
  *     strips any `authorization` the page sets.
  *
- * The React pieces (`useProposal`, `ProposalPanel`) live on the
- * `/goattown/proposal-panel` subpath so a non-React consumer — a Node
- * script, a cell — can import this module without pulling React in.
+ * The React pieces live on their own subpaths — `useProposal` /
+ * `ProposalPanel` on `/goattown/proposal-panel`, `useSetup` / `SetupPanel`
+ * on `/goattown/setup-panel` — so a non-React consumer (a Node script, a
+ * cell) can import this module without pulling React in. Re-exporting a
+ * hook from here undoes that even when the built index carries no literal
+ * `react` string, because the module GRAPH is what a bundler follows.
  */
 export {
   GoatTownClient,

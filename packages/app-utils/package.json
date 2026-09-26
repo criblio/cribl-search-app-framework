@@ -1,6 +1,6 @@
 {
   "name": "@criblio/app-utils",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -25,6 +25,7 @@
     "./investigator/metrics-tool-card": "./dist/investigator/MetricsToolCard.js",
     "./goattown": "./dist/goattown/index.js",
     "./goattown/proposal-panel": "./dist/goattown/ProposalPanel.js",
+    "./goattown/setup-panel": "./dist/goattown/SetupPanel.js",
     "./resilience-boundary": "./dist/ResilienceBoundary.js",
     "./auth": "./dist/auth.js",
     "./settings": "./dist/settings.js",

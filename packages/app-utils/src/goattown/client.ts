@@ -104,6 +104,42 @@ export class GoatTownClient {
     return headers;
   }
 
+  /**
+   * One request with a non-JSON body, through the same transport,
+   * headers and diagnostics as everything else.
+   *
+   * Returns the raw `Response` because the callers that need it —
+   * `/configurations` takes `application/yaml` — also need to read the
+   * body themselves. Exists so those calls cannot quietly bypass an
+   * injected transport or the diagnostic sink, which is what happened
+   * when provisioning called the global `fetch` directly.
+   */
+  async rawRequest(
+    path: string,
+    init: { method?: string; body?: string; contentType?: string; signal?: AbortSignal } = {},
+  ): Promise<Response> {
+    const method = init.method ?? 'GET';
+    const note = (extra: Record<string, unknown>) => this.onDiagnostic?.({
+      at: Date.now(), op: operationOf(path), method, path: redactUrl(path), ...extra,
+    });
+    let response: Response;
+    try {
+      response = await this.doFetch(`${this.baseUrl}${path}`, {
+        method,
+        signal: init.signal,
+        headers: await this.headers(
+          init.body !== undefined && init.contentType ? { 'content-type': init.contentType } : undefined,
+        ),
+        body: init.body,
+      });
+    } catch (error) {
+      note({ errorKind: errorKindOf(error) });
+      throw error;
+    }
+    note({ status: response.status, contentType: response.headers.get('content-type') });
+    return response;
+  }
+
   private async request<T>(
     path: string,
     init: { method?: string; body?: unknown; signal?: AbortSignal } = {},

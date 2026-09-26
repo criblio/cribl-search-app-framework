@@ -1,0 +1,81 @@
+.panel {
+  padding: var(--cds-space-lg);
+  background: var(--cds-color-bg);
+  border: 1px solid var(--cds-color-border-subtle);
+  border-radius: var(--cds-radius-md);
+  max-width: 640px;
+}
+.title {
+  font-size: var(--cds-font-size-lg);
+  font-weight: var(--cds-font-weight-semibold);
+  margin-bottom: var(--cds-space-xs);
+}
+.lede {
+  font-size: var(--cds-font-size-sm);
+  color: var(--cds-color-fg-subtle);
+  line-height: 1.5;
+  margin-bottom: var(--cds-space-md);
+}
+.steps {
+  list-style: none;
+  margin: 0 0 var(--cds-space-md);
+  padding: 0;
+}
+.stepRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--cds-space-sm);
+  padding: var(--cds-space-xs) 0;
+  font-size: var(--cds-font-size-sm);
+  border-bottom: 1px solid var(--cds-color-border-subtle);
+}
+.stepRow:last-child { border-bottom: none; }
+.mark {
+  flex: 0 0 auto;
+  width: 1.25rem;
+  text-align: center;
+}
+.done { color: var(--cds-color-success); }
+.pending { color: var(--cds-color-fg-subtle); }
+.blocked { color: var(--cds-color-danger); }
+.field {
+  display: flex;
+  gap: var(--cds-space-sm);
+  margin-bottom: var(--cds-space-sm);
+}
+.input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: var(--cds-font-size-sm);
+  color: var(--cds-color-fg);
+  background: var(--cds-color-bg);
+  border: 1px solid var(--cds-color-border);
+  border-radius: var(--cds-radius-sm);
+}
+.hint {
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-fg-subtle);
+  margin-bottom: var(--cds-space-md);
+  line-height: 1.5;
+}
+.meta {
+  font-family: var(--cds-font-family-mono);
+  font-size: var(--cds-font-size-xs);
+  color: var(--cds-color-fg-subtle);
+  margin-top: var(--cds-space-sm);
+}
+.error {
+  padding: var(--cds-space-sm);
+  border-left: 3px solid var(--cds-color-danger);
+  background: var(--cds-color-bg-subtle);
+  font-size: var(--cds-font-size-sm);
+  color: var(--cds-color-danger);
+  margin-bottom: var(--cds-space-sm);
+}
+.actions {
+  display: flex;
+  gap: var(--cds-space-sm);
+  margin-top: var(--cds-space-md);
+}

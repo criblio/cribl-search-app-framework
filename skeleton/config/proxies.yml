@@ -1,8 +1,34 @@
-# External API declarations for the Cribl App Platform fetch proxy.
-# Add entries here for any external domains your app needs to reach.
-# Example:
-# - host: api.example.com
+# External API declaration for the Cribl App Platform fetch proxy.
+#
+# Declare every external domain your app needs to reach. At install time an
+# administrator sees exactly which endpoints the app will use, and the proxy
+# forwards ONLY to what is declared here — an undeclared domain is blocked.
+#
+# The shape is a MAP KEYED BY HOST, not a list. A `- host:` list entry does
+# not validate.
+#
+# `headers.inject` is how an app uses a secret without ever holding one. The
+# app writes the token to its KV store; the PROXY reads it from there and
+# injects the header server-side. The browser never reads the value back,
+# and an `authorization` header set by page code is stripped regardless —
+# which is why storing a token in the KV store is supported and safe, while
+# putting one in client code is neither.
+
+# api.example.com:
 #   paths:
-#     - /v1/
+#     allowlist:
+#       - /v1/
+#     blocklist:
+#       - /v1/internal/
 #   headers:
-#     Authorization: Bearer ${API_KEY}
+#     inject:
+#       Authorization: '`Bearer ${kv.api_key}`'
+#       X-API-Version: '2024-01'
+#     allowlist:
+#       - Content-Type
+#       - x-request-id
+#     blocklist:
+#       - Cookie
+#   timeout: 30000
+#   # Verify the upstream TLS chain. Leave true for production endpoints.
+#   rejectUnauthorized: true
