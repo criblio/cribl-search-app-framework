@@ -23,7 +23,7 @@
 import type { SessionExecution, SessionStatus } from '@criblio/agent-protocol';
 import { isExecutionDrained, isTerminalStatus } from '@criblio/agent-protocol';
 import type { LoopEvent } from '../agent-loop.js';
-import { GoatTownError } from './errors.js';
+import { GoatTownError, MalformedResponseError } from './errors.js';
 import type { GoatTownClient, SessionSnapshot } from './client.js';
 import { isUserMessageFrame, wireEventToLoopEvent, type SessionFrame } from './wire.js';
 
@@ -62,9 +62,16 @@ export interface ObserveOptions {
 }
 
 export interface ObserveResult {
-  /** Why observation ended. `drained` is the only one that means the
-   *  response was fully consumed. */
-  reason: 'drained' | 'terminal-status' | 'aborted';
+  /**
+   * Why observation ended. `drained` is the ONLY value that means the
+   * response was fully consumed.
+   *
+   * `terminal-status` is the legacy path: no receipt existed, so a terminal
+   * session status was the best available signal. `stalled` means a
+   * terminal receipt promised events through `finalSeq` that the service
+   * never delivered — a real failure, deliberately not reported as success.
+   */
+  reason: 'drained' | 'terminal-status' | 'stalled' | 'aborted';
   status: SessionStatus;
   execution: SessionExecution | null;
   /** Last consumed seq. */
@@ -75,6 +82,16 @@ export interface ObserveResult {
 const DEFAULT_INTERVAL = 2000;
 /** Cap on backoff after repeated transport failures. */
 const MAX_BACKOFF_MS = 30_000;
+/**
+ * Consecutive polls allowed to make no progress toward a terminal receipt's
+ * `finalSeq` before observation gives up.
+ *
+ * A terminal receipt promising events the service never delivers used to
+ * `continue` without waiting — an immediate tight loop that hammered the
+ * service for as long as the page stayed open. Draining is still eager,
+ * but only while it is actually draining.
+ */
+const MAX_STALLED_DRAIN_POLLS = 10;
 
 /**
  * Poll until the observed request is finished and drained.
@@ -100,6 +117,10 @@ export async function observeSession(
   // cannot carry events; flapping between the two re-asks a route that has
   // already answered no.
   let useCombined = true;
+  /** Highest cursor seen while draining toward finalSeq, and how many polls
+   *  have failed to advance it. */
+  let lastDrainCursor = cursor;
+  let stalledDrainPolls = 0;
   /** Highest seq handed to the caller. Dedupe is by service seq only —
    *  never by turnId or text, both of which legitimately repeat. */
   let highestSeq = cursor;
@@ -129,9 +150,14 @@ export async function observeSession(
       failures = 0;
     } catch (error) {
       if (opts.signal?.aborted) return finish('aborted');
-      // An unknown receipt is a caller error, not a transient one: retrying
-      // re-asks a question the service has already answered definitively.
-      if (error instanceof GoatTownError && error.isUnknownReceipt) throw error;
+      // Three classes never retry, because asking again cannot change the
+      // answer and polling forever hides the real fault behind a spinner:
+      //   - an unknown receipt: the caller is observing the wrong thing;
+      //   - 401/403: a rejected credential does not become valid;
+      //   - a malformed body: the service is broken, not busy.
+      if (error instanceof MalformedResponseError) throw error;
+      if (error instanceof GoatTownError
+        && (error.isUnknownReceipt || error.isPermanentAuthFailure)) throw error;
       opts.onError?.(error);
       failures += 1;
       const waitMs = error instanceof GoatTownError && error.retryAfterSeconds != null
@@ -171,9 +197,24 @@ export async function observeSession(
 
     if (execution) {
       if (isExecutionDrained(execution, cursor)) return finish('drained');
-      // Terminal receipt whose finalSeq we have not reached: there are
-      // events still to read, so poll again immediately.
-      if (execution.finalSeq != null && cursor < execution.finalSeq) continue;
+      // Terminal receipt whose finalSeq we have not reached: events are
+      // still owed, so poll again without waiting out the interval — but
+      // only while that is actually making progress. A receipt promising
+      // frames the service never delivers would otherwise spin here as an
+      // immediate tight loop for as long as the page stayed open.
+      if (execution.finalSeq != null && cursor < execution.finalSeq) {
+        if (cursor > lastDrainCursor) {
+          lastDrainCursor = cursor;
+          stalledDrainPolls = 0;
+          continue;
+        }
+        stalledDrainPolls += 1;
+        if (stalledDrainPolls >= MAX_STALLED_DRAIN_POLLS) {
+          return finish('stalled');
+        }
+        // No progress: fall through to the normal wait rather than
+        // re-asking immediately.
+      }
     } else if (isTerminalStatus(status)) {
       // Legacy compatibility path: no receipt exists, so a terminal SESSION
       // status is the only completion signal available. Explicitly NOT

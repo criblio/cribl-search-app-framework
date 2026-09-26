@@ -23,6 +23,7 @@
 import type { WireLoopEvent, SessionEventWindow } from '@criblio/agent-protocol';
 import type { LoopEvent } from '../agent-loop.js';
 import type { ToolResultUi } from '../agent-tools.js';
+import { MalformedResponseError } from './errors.js';
 
 /** One consumed frame: the service's sequence identity plus its event. */
 export interface SessionFrame {
@@ -94,15 +95,48 @@ export function isUserMessageFrame(
 export function readEventCollection(payload: unknown): SessionFrame[] | null {
   if (!payload || typeof payload !== 'object') return null;
   const body = payload as {
-    eventWindow?: Partial<SessionEventWindow>;
+    eventWindow?: Partial<SessionEventWindow> | unknown;
     frames?: unknown;
     events?: unknown;
   };
-  const windowFrames = body.eventWindow?.frames;
-  if (Array.isArray(windowFrames)) return windowFrames.filter(isFrame);
-  if (Array.isArray(body.frames)) return body.frames.filter(isFrame);
-  if (Array.isArray(body.events)) return body.events.filter(isFrame);
+
+  // A field that is PRESENT but the wrong type is a broken service, not an
+  // absent collection. Coercing it to "no events" is indistinguishable from
+  // a healthy quiet poll, so the caller waits forever on a session that will
+  // never answer. Raise instead.
+  for (const [field, value] of [['frames', body.frames], ['events', body.events]] as const) {
+    if (value !== undefined && !Array.isArray(value)) {
+      throw new MalformedResponseError(field, value);
+    }
+  }
+  const window = body.eventWindow;
+  if (window !== undefined) {
+    if (!window || typeof window !== 'object') throw new MalformedResponseError('eventWindow', window);
+    const windowFrames = (window as Partial<SessionEventWindow>).frames;
+    if (windowFrames !== undefined && !Array.isArray(windowFrames)) {
+      throw new MalformedResponseError('eventWindow.frames', windowFrames);
+    }
+    if (Array.isArray(windowFrames)) return assertFrames('eventWindow.frames', windowFrames);
+  }
+  if (Array.isArray(body.frames)) return assertFrames('frames', body.frames);
+  if (Array.isArray(body.events)) return assertFrames('events', body.events);
   return null;
+}
+
+/**
+ * Every entry of a present collection must be a `{seq, ev}` envelope.
+ *
+ * Previously the non-envelopes were filtered out silently, which turned a
+ * service sending bare events into "an empty page" and dropped real
+ * content. The one thing this must never do is accept a bare event as a
+ * frame — that is how an envelope reaches a reducer as though it were the
+ * event it wraps.
+ */
+function assertFrames(field: string, values: unknown[]): SessionFrame[] {
+  for (const value of values) {
+    if (!isFrame(value)) throw new MalformedResponseError(`${field}[]`, value);
+  }
+  return values as SessionFrame[];
 }
 
 /** An envelope is `{seq, ev}`. Checked structurally so a bare event — which

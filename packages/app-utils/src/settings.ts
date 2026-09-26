@@ -10,7 +10,7 @@
  * here was wrong — it produced double-scoped paths that failed.
  */
 
-import { apiUrl } from './search.js';
+import { KvError, kvGetJson, kvPutText } from './kv.js';
 
 export interface AppSettings {
   dataset: string;
@@ -19,30 +19,45 @@ export interface AppSettings {
 
 const DEFAULT_SETTINGS: AppSettings = { dataset: 'otel' };
 
-function kvUrl(key: string): string {
-  return `${apiUrl()}/kvstore/${key}`;
+/**
+ * Load app settings, falling back to `defaults` when the key is absent.
+ * Saved values merge over the defaults, so adding a new setting with a
+ * default does not require migrating stored blobs.
+ *
+ * Absence falls back; a ROUTING failure does not. An HTML 404 means the
+ * request never reached the KV store, and substituting defaults there
+ * invents state the app then writes back over whatever was really stored.
+ * That distinction is why this delegates to `kvGetJson` rather than
+ * catching everything.
+ */
+export async function loadSettings(defaults: AppSettings = DEFAULT_SETTINGS): Promise<AppSettings> {
+  const result = await kvGetJson<AppSettings>('settings');
+  return result.found ? { ...defaults, ...result.value } : { ...defaults };
 }
 
 /**
- * Load app settings, falling back to `defaults` when the KV key is missing
- * or unreadable. Saved values are merged over the defaults, so adding a new
- * setting with a default doesn't require migrating stored blobs.
+ * Persist app settings.
+ *
+ * **Behavior change:** this used to ignore `response.ok`, so a rejected
+ * save reported success and the user's change silently vanished on the next
+ * load. It now throws `KvError` on failure. Callers that relied on the old
+ * silence need a `catch` — see `saveSettingsResult` for a non-throwing
+ * form.
  */
-export async function loadSettings(defaults: AppSettings = DEFAULT_SETTINGS): Promise<AppSettings> {
-  try {
-    const resp = await fetch(kvUrl('settings'));
-    if (!resp.ok) return { ...defaults };
-    const text = await resp.text();
-    return { ...defaults, ...(JSON.parse(text) as AppSettings) };
-  } catch {
-    return { ...defaults };
-  }
+export async function saveSettings(settings: AppSettings): Promise<void> {
+  await kvPutText('settings', JSON.stringify(settings));
 }
 
-export async function saveSettings(settings: AppSettings): Promise<void> {
-  await fetch(kvUrl('settings'), {
-    method: 'PUT',
-    headers: { 'content-type': 'text/plain' },
-    body: JSON.stringify(settings),
-  });
+/** Non-throwing {@link saveSettings}, for a settings page that would rather
+ *  render the failure than unwind. */
+export async function saveSettingsResult(
+  settings: AppSettings,
+): Promise<{ ok: true } | { ok: false; error: KvError }> {
+  try {
+    await saveSettings(settings);
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof KvError) return { ok: false, error };
+    throw error;
+  }
 }

@@ -52,6 +52,47 @@ export class GoatTownError extends Error {
   get isUnknownReceipt(): boolean {
     return this.status === 404 && this.code === 'execution_not_found';
   }
+
+  /**
+   * Authentication or authorization failed.
+   *
+   * Never retried. A missing or rejected credential does not become valid
+   * by asking again, and a proxy misroute that answers 401 would otherwise
+   * be polled until the page closes — burning quota and hiding the
+   * configuration error behind a spinner.
+   */
+  get isPermanentAuthFailure(): boolean {
+    return this.status === 401 || this.status === 403;
+  }
+}
+
+/**
+ * A response that did not match the contract.
+ *
+ * Distinct from GoatTownError: the request succeeded at the HTTP level and
+ * the body is still unusable. Raised rather than coerced, because the
+ * coercion — treating a malformed `frames` as "no events" — is
+ * indistinguishable from a healthy quiet poll and strands the caller
+ * forever on a service that is actually broken.
+ */
+export class MalformedResponseError extends Error {
+  readonly field: string;
+  readonly received: string;
+
+  constructor(field: string, received: unknown) {
+    super(`GoatTown response field \`${field}\` is malformed (received ${describe(received)})`);
+    this.name = 'MalformedResponseError';
+    this.field = field;
+    this.received = describe(received);
+  }
+}
+
+/** Shape-only description. Never the value — a malformed field can hold
+ *  anything, including something that should not reach a log. */
+function describe(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return `array(${value.length})`;
+  return typeof value;
 }
 
 /** Local rejection before anything is sent. Separate from GoatTownError so a

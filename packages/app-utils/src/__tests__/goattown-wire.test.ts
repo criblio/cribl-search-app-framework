@@ -12,6 +12,7 @@ import {
   readEventCollection,
   wireEventToLoopEvent,
 } from '../goattown/wire.js';
+import { MalformedResponseError } from '../goattown/errors.js';
 import { conclusionFromEntries } from '../investigator/conclusion.js';
 import { applyLoopEvent, type InvestigatorTranscriptEntry } from '../investigator/InvestigatorTranscript.js';
 
@@ -79,8 +80,25 @@ describe('readEventCollection', () => {
 
   it('never mistakes a bare event for an envelope', () => {
     // A LoopEvent has `kind` but no `seq`. Treating one as a frame feeds the
-    // envelope to the reducer as though it were the event.
-    expect(readEventCollection({ frames: [DACHSHUND] })).toEqual([]);
+    // envelope to the reducer as though it were the event. This used to be
+    // filtered out silently, which turned a broken service into "an empty
+    // page" — indistinguishable from a healthy quiet poll, so the caller
+    // waited forever. It is now visible.
+    expect(() => readEventCollection({ frames: [DACHSHUND] })).toThrow(MalformedResponseError);
+  });
+
+  it('rejects a present-but-wrong-typed collection instead of coercing it', () => {
+    expect(() => readEventCollection({ frames: 'nope' })).toThrow(/`frames` is malformed/);
+    expect(() => readEventCollection({ events: 42 })).toThrow(/`events` is malformed/);
+    expect(() => readEventCollection({ eventWindow: 'nope' })).toThrow(/`eventWindow` is malformed/);
+  });
+
+  it('describes the shape of a malformed field, never its value', () => {
+    // A malformed field can hold anything, including something that should
+    // not reach a log.
+    const error = (() => { try { readEventCollection({ frames: { secret: 'tok' } }); } catch (e) { return e as MalformedResponseError; } })();
+    expect(error?.received).toBe('object');
+    expect(JSON.stringify(error)).not.toContain('tok');
   });
 });
 

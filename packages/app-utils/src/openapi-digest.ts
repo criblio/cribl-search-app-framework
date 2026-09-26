@@ -29,6 +29,12 @@ export interface DigestOp {
   /** `x-cribl-internal` in the spec: excluded from Cribl's generated
    *  SDKs. NOT the same as unusable — see the generator's note. */
   internal?: true;
+  /** This operation is NOT in the published OpenAPI spec. It is a
+   *  documented platform contract added here by hand. Rendered with the
+   *  distinction visible so a reader never mistakes it for a generated
+   *  entry — and so a spec regeneration does not appear to have dropped
+   *  it. */
+  platformDocumented?: true;
   params?: DigestParam[];
   /** JSON request-body schema, $refs already followed. */
   body?: unknown;
@@ -38,6 +44,52 @@ export interface OpenApiDigest {
   specVersion: string;
   generatedFrom?: string;
   ops: DigestOp[];
+}
+
+/**
+ * Operations the published spec omits but apps must call.
+ *
+ * App KV is the case that forced this. It is absent from the 8 MB
+ * published spec entirely — the only "kvstore" string in 902 operations is
+ * an unrelated `/system/limits` field — so an agent searching for how to
+ * persist app state finds nothing and invents a path. The one it invents
+ * is usually group-scoped, which is exactly the URL the proxy cannot serve.
+ *
+ * Marked `platformDocumented` so the distinction stays visible: these
+ * describe how the platform behaves, not what the spec generator produced.
+ */
+export const PLATFORM_DOCUMENTED_OPS: DigestOp[] = [
+  {
+    method: 'GET',
+    path: '/kvstore/{key}',
+    operationId: 'getAppKvValue',
+    tag: 'app-kvstore',
+    platformDocumented: true,
+    summary:
+      "Read this app's KV value. Call it as `${apiUrl()}/kvstore/<key>`; the platform proxy "
+      + 'scopes it to /a/{appId}/kvstore/<key>. Do NOT add a group context or your own '
+      + '/a/<appId> segment — either double-scopes the path and 404s. A JSON "key not found" '
+      + 'is ordinary absence; an HTML body means the request never reached the KV store.',
+    params: [{ name: 'key', in: 'path', required: true, type: 'string' }],
+  },
+  {
+    method: 'PUT',
+    path: '/kvstore/{key}',
+    operationId: 'putAppKvValue',
+    tag: 'app-kvstore',
+    platformDocumented: true,
+    summary:
+      "Write this app's KV value as text/plain (JSON callers stringify first). Same scoping "
+      + 'rule as the read. Check response.ok — a rejected write returns a non-2xx that is easy '
+      + 'to ignore, and the change then vanishes on the next load.',
+    params: [{ name: 'key', in: 'path', required: true, type: 'string' }],
+  },
+];
+
+/** Digest plus the platform-documented operations. Used by search and
+ *  describe so an agent can find app KV at all. */
+export function withPlatformOps(digest: OpenApiDigest): OpenApiDigest {
+  return { ...digest, ops: [...digest.ops, ...PLATFORM_DOCUMENTED_OPS] };
 }
 
 /** The only verbs that don't change state. */
@@ -256,7 +308,12 @@ export function unmatchedTerms(digest: OpenApiDigest, query: string): string[] {
 
 /** One-line rendering of an operation, for a list of search results. */
 export function formatOpLine(op: DigestOp): string {
-  const flags = [op.internal ? 'internal' : null].filter(Boolean).join(' ');
+  const flags = [
+    op.internal ? 'internal' : null,
+    // Visible on every line: a reader must never take this for a generated
+    // spec entry, and a spec regeneration must not look like it dropped it.
+    op.platformDocumented ? 'platform-documented, not in the OpenAPI spec' : null,
+  ].filter(Boolean).join('; ');
   return [
     `${op.method} ${op.path}`,
     op.summary ? `— ${op.summary}` : null,
