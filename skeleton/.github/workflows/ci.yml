@@ -16,6 +16,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Read declared app version
+        id: version
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
       # The template includes its tested lockfile. Commit dependency changes
       # with their lockfile; the release action installs that exact graph.
       # Registry mode: no `framework-sha`, so the action skips the
@@ -29,7 +32,9 @@ jobs:
       # supply-chain hygiene every other step here follows (and which
       # `npm run security:static` enforces), not a framework source
       # dependency.
-      - uses: criblio/cribl-search-app-framework/.github/actions/release-build@5c7659bbcbdd0a4ef366f4767bfee70cf5523251
+      - uses: criblio/cribl-search-app-framework/.github/actions/release-build@336c59cf1585c26bdd8d1c551ab661693610a03c
+        with:
+          app-version: ${{ steps.version.outputs.version }}
       - name: Retain exact tested candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
