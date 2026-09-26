@@ -39,6 +39,13 @@ jobs:
       # single file — deleting the backend plugins leaves it a clean no-op.
       # This compares against the assets @cribl/apps actually ships instead.
       - run: npm run check:scaffold-contract
+      # The skeleton pins release-build by SHA, so the workflow and the
+      # action it calls are versioned independently and can disagree in
+      # silence: a composite action only WARNS about an input it does not
+      # declare. #63 added `app-version` to the action and started passing
+      # it from the template without moving the pin, so the release-version
+      # pinning it provides never ran and every gate stayed green.
+      - run: npm run check:action-pins
 
   # Prove a scaffolded app still builds. The skeleton is a template, not a
   # workspace, so nothing above touches it — and it silently rotted through

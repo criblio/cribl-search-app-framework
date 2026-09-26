@@ -11,9 +11,11 @@
   "scripts": {
     "build": "npm run build -w @criblio/agent-protocol && npm run build -w @criblio/app-utils && npm run build -w @criblio/cell-workspace",
     "check:publish-config": "node scripts/check-publish-registry.mjs",
-    "check:scaffold-contract": "node scripts/check-scaffold-contract.mjs"
+    "check:scaffold-contract": "node scripts/check-scaffold-contract.mjs",
+    "check:action-pins": "node scripts/check-action-pins.mjs"
   },
   "devDependencies": {
-    "@cribl/apps": "1.1.0"
+    "@cribl/apps": "1.1.0",
+    "yaml": "^2.9.0"
   }
 }
