@@ -79,10 +79,30 @@ function bodyKind(text: string, contentType: string | null): string {
   }
 }
 
-/** Bodies the store uses to say "no such key". Matched case-insensitively
- *  on the message rather than the status, because the status alone cannot
- *  separate absence from a misroute. */
-const NOT_FOUND = /key not found|not\s*found/i;
+/**
+ * Is this response the KV store's actual missing-key answer?
+ *
+ * Narrow on purpose. The previous test matched /not\s*found/i against ANY
+ * non-OK body, which reported a 403 `{"message":"User not found"}` as
+ * absent data — an authorization failure laundered into "no value yet",
+ * after which the app writes defaults over a store it was never allowed to
+ * read. A 500 mentioning "upstream not found" fell into the same hole.
+ *
+ * Absence now requires all three: status 404, a JSON body, and the
+ * store's explicit key-missing discriminator. Anything else is a KvError.
+ */
+function isKeyMissing(status: number, kind: string, text: string): boolean {
+  if (status !== 404 || kind !== 'json') return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== 'object') return false;
+  const message = (parsed as { message?: unknown }).message;
+  return typeof message === 'string' && /^key not found$/i.test(message.trim());
+}
 
 function kvUrl(key: string): string {
   return `${apiUrl()}/kvstore/${key}`;
@@ -115,7 +135,7 @@ export async function kvGetJson<T>(key: string, signal?: AbortSignal): Promise<K
     );
   }
   if (!response.ok) {
-    if (NOT_FOUND.test(text)) return { found: false };
+    if (isKeyMissing(response.status, kind, text)) return { found: false };
     throw new KvError(
       `KV read of ${key} failed with ${response.status}`,
       { key, status: response.status, contentType, bodyKind: kind },
@@ -181,39 +201,97 @@ export async function kvPutText(key: string, body: string, signal?: AbortSignal)
 // ─────────────────────────────────────────────────────────────────
 
 /**
- * Separator for key parts.
- *
- * `:` is chosen for one property that decides the whole design:
- * `encodeURIComponent(':')` is `%3A`, so an encoded part can NEVER contain
- * a raw `:`, which makes the join unambiguous and the split exact. It is
- * also a legal path character, so the key stays readable in a URL.
- *
- * `~` looks like the natural choice and is the wrong one —
- * `encodeURIComponent` leaves it alone (it is unreserved in RFC 3986), so
- * a member id containing `~` would split into two parts. That is not
- * hypothetical: it is one of the ids this module is required to survive.
+ * Key format version. Present so the shape can change again without
+ * silently reinterpreting anything already stored.
  */
-const KEY_SEPARATOR = ':';
+const KEY_VERSION = 'k1';
+
+/** Separator between encoded parts. Outside the hex alphabet, so the split
+ *  is exact and needs no escaping rules of its own. */
+const KEY_SEPARATOR = '-';
 
 /**
  * Build a stable, route-safe key for per-member state.
  *
- * KV keys travel in a URL path, so a member id containing `/` would invent
- * a path segment and one containing `%` would be double-decoded. Both are
- * real — ids are often emails or external subjects.
+ * **Output uses only `[0-9a-f-]` after a `k1` prefix** — a strict subset of
+ * the unreserved path characters every router accepts. That is the whole
+ * requirement, and two earlier attempts got it wrong by reasoning about
+ * the wrong layer:
  *
- * Each part is `encodeURIComponent`-encoded and joined with `:`. `|` is NOT
- * escaped by `encodeURIComponent` and is legal in a path segment, so it
- * survives as itself; `/`, `%`, `~` and `:` are all escaped and cannot
- * confuse either the router or the split.
+ *  - `~` as separator: chosen because `encodeURIComponent` supposedly
+ *    escapes it. It does not (`~` is unreserved), so an id containing one
+ *    split into two parts.
+ *  - `:` as separator: chosen because `encodeURIComponent` DOES escape it,
+ *    which made the split unambiguous — but the separator itself is
+ *    written raw, and the Cribl KV router does not match a path segment
+ *    containing a raw `:`. Measured against live staging: a key with `:`
+ *    returns an HTML 404 (unmatched route), not the JSON
+ *    `{"message":"Key not found"}` a real missing key returns. Percent
+ *    escapes fare no better — `%7C` and `%2F` also produce the HTML 404.
+ *
+ * So no character is trusted to survive. Each part is hex-encoded from its
+ * UTF-8 bytes, which cannot emit anything but `0-9a-f`, and parts are
+ * joined with `-`, which hex cannot contain. Hex doubles the length; at
+ * member-id sizes that is worth the certainty, and it stays readable in a
+ * log with a single `xxd`-style decode.
+ *
+ * Every input round-trips exactly: `|`, `/`, `~`, `%`, `:`, spaces, and
+ * non-ASCII alike.
  */
 export function memberKey(namespace: string, memberId: string, ...rest: string[]): string {
   if (!namespace) throw new Error('memberKey requires a namespace');
   if (!memberId) throw new Error('memberKey requires a member id');
-  return [namespace, memberId, ...rest].map(encodeURIComponent).join(KEY_SEPARATOR);
+  return [KEY_VERSION, ...[namespace, memberId, ...rest].map(hexEncode)].join(KEY_SEPARATOR);
 }
 
-/** Reverse {@link memberKey}. Exact for every input it produced. */
+/**
+ * Reverse {@link memberKey}.
+ *
+ * Throws on anything it did not produce. A key from app-utils 0.9.0 —
+ * percent-encoded parts joined with `:` — is rejected here rather than
+ * re-split, because misreading a stored key is worse than refusing it.
+ * In practice no 0.9.0 key can hold data: the router never matched one, so
+ * every read and write against it failed. See {@link isLegacyMemberKey}.
+ */
 export function parseMemberKey(key: string): string[] {
-  return key.split(KEY_SEPARATOR).map(decodeURIComponent);
+  const parts = key.split(KEY_SEPARATOR);
+  if (parts[0] !== KEY_VERSION) {
+    throw new Error(
+      `Not a ${KEY_VERSION} member key: ${JSON.stringify(key.slice(0, 40))}. `
+      + 'Keys built by app-utils 0.9.0 used a different, non-routable shape and cannot be parsed here.',
+    );
+  }
+  return parts.slice(1).map(hexDecode);
+}
+
+/**
+ * Does this look like a key built by app-utils 0.9.0?
+ *
+ * Offered so a caller can detect and report one rather than have it
+ * silently reinterpreted. Those keys contain a raw `:`, which the Cribl KV
+ * router never matched, so they cannot have stored anything — but a caller
+ * that recorded a key somewhere else deserves to be told rather than
+ * guessed at.
+ */
+export function isLegacyMemberKey(key: string): boolean {
+  return !key.startsWith(`${KEY_VERSION}${KEY_SEPARATOR}`) && key.includes(':');
+}
+
+const HEX = '0123456789abcdef';
+
+/** UTF-8 bytes as lowercase hex. Cannot emit a character outside `0-9a-f`. */
+function hexEncode(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let out = '';
+  for (const byte of bytes) out += HEX[byte >> 4] + HEX[byte & 0x0f];
+  return out;
+}
+
+function hexDecode(value: string): string {
+  if (value.length % 2 !== 0 || !/^[0-9a-f]*$/.test(value)) {
+    throw new Error(`Malformed member key part: ${JSON.stringify(value.slice(0, 40))}`);
+  }
+  const bytes = new Uint8Array(value.length / 2);
+  for (let i = 0; i < bytes.length; i += 1) bytes[i] = parseInt(value.slice(i * 2, i * 2 + 2), 16);
+  return new TextDecoder().decode(bytes);
 }

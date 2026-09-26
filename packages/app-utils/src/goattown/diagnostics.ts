@@ -39,24 +39,46 @@ export interface DiagnosticEvent {
   cursor?: number;
   finalSeq?: number | null;
   executionState?: SessionExecution['state'];
-  /** Message only — never a body, never a value. */
-  error?: string;
+  /**
+   * Failure CATEGORY, never the exception text.
+   *
+   * A thrown network error routinely carries the full request URL, and a
+   * URL routinely carries a token — recording `error.message` verbatim put
+   * that in a diagnostic dump a user pastes into a bug report. The
+   * category is what a reader actually acts on.
+   */
+  errorKind?: 'network' | 'aborted' | 'timeout' | 'malformed-response' | 'http' | 'unknown';
 }
 
 /** Called for each interaction. Wired through the client and observer so an
  *  app never has to wrap `fetch` to see what happened. */
 export type DiagnosticSink = (event: DiagnosticEvent) => void;
 
-/** Opaque id segments in the session routes. */
-const ID_SEGMENT = /^[0-9a-f]{8,}$|^[A-Za-z0-9_-]{16,}$/;
+/**
+ * Segments that name a route rather than an instance.
+ *
+ * Redaction works from route STRUCTURE, not from what an id looks like. A
+ * length or hex heuristic keeps whatever it fails to recognise — a short
+ * session id, a ticket that happens to look like a word — and "it did not
+ * look like an id" is not a property anyone should rely on for a value
+ * that may be a bearer.
+ *
+ * So the rule is inverted: a segment is kept only if it is a known route
+ * word. Everything else becomes `:seg`.
+ */
+const ROUTE_WORDS = new Set([
+  '', 'api', 'v1', 'v2', 'investigations', 'events', 'status', 'messages', 'stop', 'close',
+  'reopen', 'cancel', 'recover', 'compact', 'archive', 'workspace', 'llm', 'files', 'file',
+  'bundle', 'tarball', 'patch', 'diff', 'baseline', 'terminal', 'agents', 'protocol',
+  'configurations', 'kvstore', 'ws', 'ws-ticket', 'healthz', 'system', 'search', 'a', 'm', 'p',
+]);
 
 /**
  * Reduce a URL to its route shape.
  *
- * Path ids become `:id` and every query value is dropped while its key is
- * kept — a caller needs to know that `requestId` was sent, not what it was.
- * Ids are not usually secret, but a signed ticket in a path is, and the
- * shape is what identifies a misroute anyway.
+ * Unknown path segments become `:seg` and every query VALUE is dropped
+ * while its key is kept — a reader needs to know `requestId` was sent, not
+ * what it was. The shape is what identifies a misroute anyway.
  */
 export function redactUrl(raw: string): string {
   let url: URL;
@@ -66,10 +88,28 @@ export function redactUrl(raw: string): string {
     return '(unparseable url)';
   }
   const path = url.pathname.split('/')
-    .map((segment) => (ID_SEGMENT.test(segment) ? ':id' : segment))
+    .map((segment) => (ROUTE_WORDS.has(segment) ? segment : ':seg'))
     .join('/');
   const keys = [...new Set([...url.searchParams.keys()])];
   return keys.length > 0 ? `${path}?${keys.map((k) => `${k}=…`).join('&')}` : path;
+}
+
+/**
+ * Classify a thrown value without retaining its text.
+ *
+ * Deliberately shape-only: the message is the thing that carries the URL,
+ * and the URL is the thing that carries the token.
+ */
+export function errorKindOf(error: unknown): NonNullable<DiagnosticEvent['errorKind']> {
+  if (error && typeof error === 'object') {
+    const name = (error as { name?: unknown }).name;
+    if (name === 'AbortError') return 'aborted';
+    if (name === 'TimeoutError') return 'timeout';
+    if (name === 'MalformedResponseError') return 'malformed-response';
+    if (name === 'GoatTownError') return 'http';
+    if (name === 'TypeError') return 'network';
+  }
+  return 'unknown';
 }
 
 /** Route family from a path, for grouping. */

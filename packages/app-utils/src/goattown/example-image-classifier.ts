@@ -73,8 +73,18 @@ export async function classifyPhoto(
     intervalMs: 1500,
     signal,
   });
-  if (initial.outcome === 'transport-error') {
-    return done('undetermined', '', initial, diagnostics);
+  // Require COMPLETED, not merely "not a transport error". A create
+  // request that failed, was stopped, stalled, or is untracked has not
+  // established a session ready for the image — sending into one of those
+  // produces an answer about a conversation that did not happen.
+  if (initial.outcome !== 'completed') {
+    return done(
+      'undetermined',
+      `The session's opening request ended as "${initial.outcome}" rather than completing, `
+      + 'so no image was sent.',
+      initial,
+      diagnostics,
+    );
   }
 
   // 2. Preflight. Configuration-level, but it is what the send checks.

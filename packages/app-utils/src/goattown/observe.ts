@@ -48,6 +48,16 @@ export interface ObserveOptions {
   onUserMessage?: (content: string, seq: number, imageCount: number) => void;
   onStatus?: (status: SessionStatus) => void;
   onExecution?: (execution: SessionExecution) => void;
+  /**
+   * Called with the consumed seq after EVERY frame, including user
+   * messages and kinds this version does not render.
+   *
+   * Exists because the cursor is the one thing a caller must keep when
+   * observation throws. Without it a transport failure discarded the
+   * position, and resuming replayed every event already folded into the
+   * transcript.
+   */
+  onCursor?: (seq: number) => void;
   /** Transport errors. Polling continues — a single failed poll is not a
    *  failed session. */
   onError?: (error: unknown) => void;
@@ -82,6 +92,16 @@ export interface ObserveResult {
 const DEFAULT_INTERVAL = 2000;
 /** Cap on backoff after repeated transport failures. */
 const MAX_BACKOFF_MS = 30_000;
+/**
+ * Floor on backoff after a failure.
+ *
+ * Backoff is derived from the poll interval, and a caller may legitimately
+ * pass 0 (tests do, and a UI wanting the tightest possible loop might).
+ * `0 * 2**n` is 0, so without a floor a transient network error retries as
+ * fast as the event loop allows — the same hot-loop shape as the stalled
+ * drain, reached by a different route.
+ */
+const MIN_BACKOFF_MS = 50;
 /**
  * Consecutive polls allowed to make no progress toward a terminal receipt's
  * `finalSeq` before observation gives up.
@@ -160,9 +180,12 @@ export async function observeSession(
         && (error.isUnknownReceipt || error.isPermanentAuthFailure)) throw error;
       opts.onError?.(error);
       failures += 1;
+      // Retry-After is obeyed as sent, including 0 — the service is the
+      // authority on when it will answer. Everything else backs off from
+      // the interval, floored so it can never become a hot loop.
       const waitMs = error instanceof GoatTownError && error.retryAfterSeconds != null
         ? error.retryAfterSeconds * 1000
-        : Math.min(interval * 2 ** (failures - 1), MAX_BACKOFF_MS);
+        : Math.min(Math.max(interval * 2 ** (failures - 1), MIN_BACKOFF_MS), MAX_BACKOFF_MS);
       await delay(waitMs, opts.signal);
       continue;
     }
@@ -182,6 +205,9 @@ export async function observeSession(
       highestSeq = frame.seq;
       cursor = frame.seq;
       frameCount += 1;
+      // Before dispatch: a frame is consumed once its seq is taken,
+      // whatever kind it turns out to be.
+      opts.onCursor?.(frame.seq);
       if (isUserMessageFrame(frame)) {
         opts.onUserMessage?.(frame.ev.content, frame.seq, frame.ev.imageCount ?? 0);
         continue;

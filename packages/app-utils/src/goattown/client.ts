@@ -28,7 +28,7 @@ import type {
 } from '@criblio/agent-protocol';
 import { DEFAULT_IMAGE_INPUT } from '@criblio/agent-protocol';
 import { errorFromResponse, ImageInputError } from './errors.js';
-import { operationOf, redactUrl, type DiagnosticSink } from './diagnostics.js';
+import { errorKindOf, operationOf, redactUrl, type DiagnosticSink } from './diagnostics.js';
 import { readEventCollection, type SessionFrame } from './wire.js';
 
 /** An image attached to a message. `data` is raw base64 — no `data:` URL
@@ -123,8 +123,10 @@ export class GoatTownClient {
       });
     } catch (error) {
       // A network/CORS failure never reaches the status branch below, and is
-      // exactly the shape a proxy misconfiguration takes.
-      note({ error: error instanceof Error ? error.message : String(error) });
+      // exactly the shape a proxy misconfiguration takes. Only the CATEGORY
+      // is recorded: a thrown fetch error carries the request URL, and the
+      // URL can carry a token.
+      note({ errorKind: errorKindOf(error) });
       throw error;
     }
     const contentType = response.headers.get('content-type');
