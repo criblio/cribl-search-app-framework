@@ -49,6 +49,7 @@ import {
   searchTerms,
   unmatchedTerms,
   type OpenApiDigest,
+  withPlatformOps,
 } from './openapi-digest.js';
 
 /** A write awaiting the user, as the host stores it. */
@@ -120,7 +121,9 @@ export interface CriblApiResponse {
 }
 
 export interface CriblApiToolDeps {
-  /** The build-time OpenAPI digest to search. */
+  /** The build-time OpenAPI digest to search. Augmented at construction
+   *  with the platform-documented operations the published spec omits (app
+   *  KV), so an agent can discover them at all. */
   digest: OpenApiDigest;
   /** Execute a request against the workspace. Should NOT throw on a
    *  non-2xx — a 403 is information the agent should see. */
@@ -238,6 +241,10 @@ export function createCriblApiTool(
 ): (call: ToolCallInvocation, signal?: AbortSignal) => Promise<ToolExecutionResult> {
   const maxChars = deps.maxResponseChars ?? DEFAULT_MAX_RESPONSE;
   const newId = deps.newApprovalId ?? (() => crypto.randomUUID());
+  // Augmented once: the published spec omits app KV entirely, so without
+  // this an agent searching for how to persist app state finds nothing and
+  // invents a group-scoped path the proxy cannot serve.
+  const apiDigest = withPlatformOps(deps.digest);
 
   return async (call, signal) => {
     const args = parseArgs<CriblApiArgs>(call.arguments);
@@ -252,7 +259,7 @@ export function createCriblApiTool(
           error: 'missing query',
         });
       }
-      const hits = searchOperations(deps.digest, query, {
+      const hits = searchOperations(apiDigest, query, {
         method: args.method,
         writes: args.writesOnly === true ? true : undefined,
         limit: args.limit,
@@ -265,7 +272,7 @@ export function createCriblApiTool(
         // is absent from the whole spec, so name those words: a model
         // that wrote nine adjectives cannot otherwise tell which one
         // sank the search.
-        const dead = unmatchedTerms(deps.digest, query);
+        const dead = unmatchedTerms(apiDigest, query);
         const filtered = args.method || args.writesOnly === true;
         const why =
           dead.length === terms.length
@@ -289,7 +296,7 @@ export function createCriblApiTool(
       const lines = hits.map((h) => formatOpLine(h.op));
       const content = [
         ignored.length === 0
-          ? `${hits.length} endpoint${hits.length === 1 ? '' : 's'} matching ${JSON.stringify(query)} (Cribl ${deps.digest.specVersion}):`
+          ? `${hits.length} endpoint${hits.length === 1 ? '' : 's'} matching ${JSON.stringify(query)} (Cribl ${apiDigest.specVersion}):`
           : `No endpoint matches all of ${JSON.stringify(query)}, so these ${hits.length} are the closest partial matches (Cribl ${deps.digest.specVersion}) — ignoring: ${ignored.join(', ')}:`,
         ...lines,
         '',
@@ -308,7 +315,7 @@ export function createCriblApiTool(
           error: 'missing method or path',
         });
       }
-      const op = matchOperation(deps.digest, method, stripContext(path));
+      const op = matchOperation(apiDigest, method, stripContext(path));
       if (!op) {
         return fail(
           call,
@@ -459,11 +466,46 @@ function hasContext(path: string): boolean {
  */
 function contextHint(status: number, path: string): string | undefined {
   if (status !== 404) return undefined;
-  if (hasContext(path)) {
-    return `Not found. Some endpoints are only served WITHOUT a group context — try ${stripContext(path)}.`;
+  const bare = stripContext(path);
+
+  // App KV is NOT a group-context endpoint, and advising one actively
+  // breaks it: the platform proxy scopes `${apiUrl()}/kvstore/<key>` to
+  // `/a/{appId}/kvstore/<key>` on its own, so `/m/default_search/a/<app>/
+  // kvstore/<key>` is double-scoped and 404s forever. Worse, an ordinary
+  // missing key is a normal, expected answer here — suggesting a route
+  // change sends a model to rewrite a URL that was already correct.
+  if (/^\/(?:a\/[^/]+\/)?kvstore(?:\/|$)/.test(bare)) {
+    return 'Not found. For app KV this usually means the KEY is absent, which is a normal '
+      + 'answer, not a routing problem. Call `${apiUrl()}/kvstore/<key>` and let the platform '
+      + 'scope it; do NOT add a group context or your own /a/<appId> segment, both of which '
+      + 'double-scope the path. An HTML body here (rather than JSON) means the request never '
+      + 'reached the KV store.';
   }
-  return `Not found. Many endpoints (notably all of /search/*) are only served under a group context — try /m/default_search${path}. The spec lists paths bare, so this 404 does not mean the endpoint is missing.`;
+
+  if (hasContext(path)) {
+    return `Not found. Some endpoints are only served WITHOUT a group context — try ${bare}.`;
+  }
+
+  // Only advise a group context for the families that actually require one.
+  // Blanket advice turned every 404 into "your URL is wrong", which is the
+  // opposite of the truth for a resource that simply does not exist.
+  if (CONTEXT_SCOPED.test(bare)) {
+    return `Not found. ${bare.split('/')[1]}/* is served under a group context — try /m/default_search${path}. The spec lists paths bare, so this 404 does not mean the endpoint is missing.`;
+  }
+
+  return 'Not found. This path matched no resource. If the endpoint itself is missing rather '
+    + 'than the resource, check whether it belongs to a group-scoped family (/search/*, '
+    + '/system/*) and needs a /m/{group} prefix.';
 }
+
+/**
+ * Endpoint families the workspace serves only under a group context.
+ *
+ * Deliberately a list rather than "everything": the previous blanket advice
+ * told a model to prepend /m/default_search to app-KV paths, which is how a
+ * correct URL gets rewritten into a permanently broken one.
+ */
+const CONTEXT_SCOPED = /^\/(search|system|products)(?:\/|$)/;
 
 /**
  * The nastiest failure this API has, because it doesn't look like one.

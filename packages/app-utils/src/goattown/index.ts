@@ -34,6 +34,7 @@ export {
 export {
   GoatTownError,
   ImageInputError,
+  MalformedResponseError,
   errorFromResponse,
   retryAfterSeconds,
 } from './errors.js';
@@ -48,6 +49,14 @@ export {
   type ObserveOptions,
   type ObserveResult,
 } from './observe.js';
+export {
+  runRequest,
+  sendAndRun,
+  type RequestOutcome,
+  type RequestResult,
+  type RunRequestOptions,
+  type SendRequestInput,
+} from './request.js';
 /** Lives in `investigator/` — it reads transcript entries and has nothing
  *  to do with the session transport — and is re-exported here so a consumer
  *  of this module needs one import. */
@@ -58,7 +67,11 @@ export {
 } from '../investigator/conclusion.js';
 export {
   SessionDiagnostics,
+  operationOf,
   redact,
+  redactUrl,
+  type DiagnosticEvent,
+  type DiagnosticSink,
   type DiagnosticSnapshot,
 } from './diagnostics.js';
 export {

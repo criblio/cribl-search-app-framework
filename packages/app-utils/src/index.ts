@@ -25,7 +25,16 @@ export {
   type ResilienceFallbackProps,
 } from './ResilienceBoundary.js';
 export { getBearerToken, oauthEndpoints, type OAuthConfig } from './auth.js';
-export { loadSettings, saveSettings, type AppSettings } from './settings.js';
+export {
+  KvError,
+  kvGetJson,
+  kvPutJson,
+  kvPutText,
+  memberKey,
+  parseMemberKey,
+  type KvResult,
+} from './kv.js';
+export { loadSettings, saveSettings, saveSettingsResult, type AppSettings } from './settings.js';
 export { loadDotEnv } from './dotenv.js';
 export {
   reconcile,

@@ -21,14 +21,16 @@ export {
   type InvestigatorSeedBase,
 } from './InvestigatorChat.js';
 export {
-  InvestigatorTranscript,
   applyLoopEvent,
-  type InvestigatorTranscriptProps,
   type InvestigatorTranscriptEntry,
   type InvestigatorUserEntry,
   type InvestigatorAssistantEntry,
   type InvestigatorToolCallEntry,
   type InvestigatorErrorEntry,
+} from './transcript.js';
+export {
+  InvestigatorTranscript,
+  type InvestigatorTranscriptProps,
 } from './InvestigatorTranscript.js';
 export { ResultTable, type ResultTableProps } from './ResultTable.js';
 export {

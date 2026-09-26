@@ -28,6 +28,7 @@ import type {
 } from '@criblio/agent-protocol';
 import { DEFAULT_IMAGE_INPUT } from '@criblio/agent-protocol';
 import { errorFromResponse, ImageInputError } from './errors.js';
+import { operationOf, redactUrl, type DiagnosticSink } from './diagnostics.js';
 import { readEventCollection, type SessionFrame } from './wire.js';
 
 /** An image attached to a message. `data` is raw base64 — no `data:` URL
@@ -51,6 +52,15 @@ export interface GoatTownClientOptions {
   userId: () => Promise<string>;
   /** Injected for tests. Defaults to the global `fetch`. */
   fetch?: typeof fetch;
+  /**
+   * Called for every request with a redacted record of what happened.
+   *
+   * Exists so an app never has to wrap `fetch` to find out why a session
+   * looked empty — the decisive facts (status, content type, which event
+   * collection came back) are captured here, and nothing that could carry
+   * a credential is.
+   */
+  onDiagnostic?: DiagnosticSink;
 }
 
 /** Observation response, whichever route produced it. */
@@ -69,12 +79,14 @@ export class GoatTownClient {
   readonly baseUrl: string;
   private readonly userId: () => Promise<string>;
   private readonly doFetch: typeof fetch;
+  private readonly onDiagnostic?: DiagnosticSink;
   private protocolCache: ProtocolResponse | null = null;
 
   constructor(options: GoatTownClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
     this.userId = options.userId;
     this.doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.onDiagnostic = options.onDiagnostic;
   }
 
   // ── transport ────────────────────────────────────────────────
@@ -98,12 +110,25 @@ export class GoatTownClient {
   ): Promise<T> {
     const method = init.method ?? 'GET';
     const hasBody = init.body !== undefined;
-    const response = await this.doFetch(`${this.baseUrl}${path}`, {
-      method,
-      signal: init.signal,
-      headers: await this.headers(hasBody ? { 'content-type': 'application/json' } : undefined),
-      body: hasBody ? JSON.stringify(init.body) : undefined,
+    const note = (extra: Record<string, unknown>) => this.onDiagnostic?.({
+      at: Date.now(), op: operationOf(path), method, path: redactUrl(path), ...extra,
     });
+    let response: Response;
+    try {
+      response = await this.doFetch(`${this.baseUrl}${path}`, {
+        method,
+        signal: init.signal,
+        headers: await this.headers(hasBody ? { 'content-type': 'application/json' } : undefined),
+        body: hasBody ? JSON.stringify(init.body) : undefined,
+      });
+    } catch (error) {
+      // A network/CORS failure never reaches the status branch below, and is
+      // exactly the shape a proxy misconfiguration takes.
+      note({ error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+    const contentType = response.headers.get('content-type');
+    note({ status: response.status, contentType });
     if (!response.ok) throw await errorFromResponse(response);
     if (response.status === 204) return undefined as T;
     return (await response.json()) as T;
@@ -220,6 +245,7 @@ export class GoatTownClient {
       { signal: opts.signal },
     );
     const frames = readEventCollection(body);
+    this.noteCollection(path0('status'), body, frames, opts.requestId);
     return {
       status: body.status,
       latestSeq: body.latestSeq,
@@ -247,6 +273,7 @@ export class GoatTownClient {
       { signal: opts.signal },
     );
     const frames = readEventCollection(body);
+    this.noteCollection(path0('events'), body, frames, opts.requestId);
     return {
       status: body.status,
       latestSeq: body.latestSeq,
@@ -254,6 +281,36 @@ export class GoatTownClient {
       execution: body.execution,
       carriedEvents: frames !== null,
     };
+  }
+
+  /** Record which event collection an observation carried — the fact that
+   *  separates "this route serves no events" from "nothing is new". */
+  private noteCollection(
+    op: string,
+    body: Record<string, unknown> | unknown,
+    frames: SessionFrame[] | null,
+    requestId?: string,
+  ): void {
+    if (!this.onDiagnostic) return;
+    const record = (body ?? {}) as Record<string, unknown>;
+    const collection = frames === null
+      ? 'absent'
+      : record.eventWindow !== undefined
+        ? 'eventWindow.frames'
+        : record.frames !== undefined
+          ? 'frames'
+          : 'events';
+    const execution = record.execution as { state?: unknown; finalSeq?: unknown } | null | undefined;
+    this.onDiagnostic({
+      at: Date.now(),
+      op,
+      method: 'GET',
+      path: `/investigations/:id/${op}`,
+      collection,
+      requestId,
+      finalSeq: typeof execution?.finalSeq === 'number' ? execution.finalSeq : null,
+      executionState: execution?.state as never,
+    });
   }
 
   // ── lifecycle ────────────────────────────────────────────────
@@ -307,6 +364,8 @@ export class GoatTownClient {
 }
 
 const enc = encodeURIComponent;
+/** Route family label for a collection note. */
+const path0 = (op: string) => op;
 
 /**
  * Reject images that the service will reject, before sending them.
