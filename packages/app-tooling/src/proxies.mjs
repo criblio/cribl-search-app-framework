@@ -146,3 +146,77 @@ export function diffProxies(actual, expected, {
   walk(actual ?? {}, expected ?? {}, '');
   return diffs;
 }
+
+/**
+ * Validate a parsed proxies.yml against the platform's schema.
+ *
+ * The shape is a MAP KEYED BY HOST. A list of `- host:` entries parses as
+ * valid YAML and is silently wrong — the proxy declares nothing, every
+ * external call is blocked at runtime, and the failure surfaces as a CORS
+ * or network error far from its cause. The skeleton shipped exactly that
+ * example, so this exists to make the wrong shape fail at inspect time.
+ *
+ * Returns a list of human-readable problems; empty means valid.
+ */
+export function validateProxies(parsed) {
+  const problems = [];
+  if (parsed == null) return problems;
+  if (Array.isArray(parsed)) {
+    problems.push(
+      'proxies.yml must be a map keyed by host, not a list. Use `api.example.com:` at the '
+      + 'top level rather than `- host: api.example.com`.',
+    );
+    return problems;
+  }
+  if (typeof parsed !== 'object') {
+    problems.push('proxies.yml must be a map keyed by host');
+    return problems;
+  }
+
+  const KNOWN = new Set(['paths', 'headers', 'timeout', 'rejectUnauthorized']);
+  for (const [host, entry] of Object.entries(parsed)) {
+    const at = `proxies.yml: ${host}`;
+    // A bare hostname, no scheme and no path — the proxy matches on host.
+    if (/^[a-z]+:\/\//i.test(host) || host.includes('/')) {
+      problems.push(`${at}: use a bare hostname, without a scheme or path`);
+    }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      problems.push(`${at}: expected a map of ${[...KNOWN].join(', ')}`);
+      continue;
+    }
+    for (const key of Object.keys(entry)) {
+      if (!KNOWN.has(key)) {
+        problems.push(`${at}: unknown key \`${key}\` (expected ${[...KNOWN].join(', ')})`);
+      }
+    }
+    for (const [group, allowed] of [['paths', ['allowlist', 'blocklist']], ['headers', ['inject', 'allowlist', 'blocklist']]]) {
+      const value = entry[group];
+      if (value === undefined) continue;
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        problems.push(`${at}.${group}: expected a map of ${allowed.join(', ')}`);
+        continue;
+      }
+      for (const key of Object.keys(value)) {
+        if (!allowed.includes(key)) {
+          problems.push(`${at}.${group}: unknown key \`${key}\` (expected ${allowed.join(', ')})`);
+        }
+      }
+      // `headers.Authorization: …` directly under headers is the mistake
+      // the old skeleton example taught; name it rather than just
+      // reporting an unknown key.
+      if (group === 'headers' && Object.keys(value).some((k) => /^authorization$/i.test(k))) {
+        problems.push(
+          `${at}.headers: put an injected header under \`headers.inject\`, not directly under `
+          + '`headers`. Only `inject` is sent upstream.',
+        );
+      }
+    }
+    if (entry.timeout !== undefined && typeof entry.timeout !== 'number') {
+      problems.push(`${at}.timeout: expected a number of milliseconds`);
+    }
+    if (entry.rejectUnauthorized !== undefined && typeof entry.rejectUnauthorized !== 'boolean') {
+      problems.push(`${at}.rejectUnauthorized: expected true or false`);
+    }
+  }
+  return problems;
+}

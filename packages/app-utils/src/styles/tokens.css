@@ -77,4 +77,15 @@
   /* Transitions */
   --cds-transition-fast: 120ms ease;
   --cds-transition-normal: 200ms ease;
+
+  /* Aliases and gaps found by sweeping every stylesheet in the package
+     against this sheet. A `var()` naming a token that does not exist is
+     not a compile error and not a visible one either — it silently falls
+     back to the property's initial value, so an error message renders in
+     the body colour and nobody notices until someone looks for red. */
+  --cds-color-error: var(--cds-color-danger);
+  --cds-color-text: var(--cds-color-fg);
+  --cds-font-family-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  --cds-space-2xs: 2px;
 }
