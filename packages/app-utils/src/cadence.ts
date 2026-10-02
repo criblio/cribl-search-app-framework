@@ -83,6 +83,23 @@ export function subscribeSearchCadence(fn: () => void): () => void {
  * 1m cadence its dependent searches ran hourly. A dependent at the 1m
  * cadence reads the previous minute's output instead.
  *
+ * The offset is RELATIVE TO THE INPUT, and it composes: shifting an
+ * already-shifted step shifts it again,
+ *
+ *   offsetCron('1-59/5 * * * *', 2)  → '3-59/5 * * * *'
+ *   offsetCron(offsetCron(c, a), b) === offsetCron(c, a + b)   (step crons)
+ *
+ * so pass the SOURCE search's cron — normally `getSearchCadenceCron()` —
+ * never a schedule that has been offset already (one read back from a
+ * saved search, say), or the dependent drifts a further `minutes` on every
+ * reconcile. This is deliberate and differs from the copy APM carried,
+ * which shifted only a bare `*\/N` and returned `a-59/N` unchanged — i.e.
+ * idempotent rather than composing. Composing is what makes a chain
+ * expressible (source → +1 → +2 is `offsetCron(offsetCron(src, 1), 1)`)
+ * and `a-59/N` is otherwise a perfectly ordinary source schedule; an
+ * idempotent version would silently ignore the offset for any source that
+ * already starts off the hour.
+ *
  * Rules, applied to the minute field only:
  *   - `*` or `*\/1`             → unchanged
  *   - `*\/N` or `a-59/N` (a < N) → `k-59/N`, k = (a + minutes) mod N;

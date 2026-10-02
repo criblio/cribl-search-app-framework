@@ -108,16 +108,16 @@ function kvUrl(key: string): string {
   return `${apiUrl()}/kvstore/${key}`;
 }
 
-/**
- * Read a JSON value.
- *
- * Absence yields `{found: false}`. Anything else — a misroute, a rejected
- * credential, an unparseable body — throws `KvError`.
- */
-export async function kvGetJson<T>(key: string, signal?: AbortSignal): Promise<KvResult<T>> {
+/** One KV read, classified: absent, or a 2xx body. Everything else —
+ *  a misroute (HTML), a rejected credential, a 5xx — throws `KvError`. */
+async function readKv(
+  key: string,
+  signal: AbortSignal | undefined,
+  accept: string,
+): Promise<{ found: false } | { found: true; text: string; status: number; contentType: string | null; kind: string }> {
   let response: Response;
   try {
-    response = await fetch(kvUrl(key), { signal, headers: { accept: 'application/json' } });
+    response = await fetch(kvUrl(key), { signal, headers: { accept } });
   } catch (error) {
     throw new KvError(`KV read of ${key} failed before reaching the store: ${
       error instanceof Error ? error.message : String(error)}`, { key });
@@ -141,15 +141,44 @@ export async function kvGetJson<T>(key: string, signal?: AbortSignal): Promise<K
       { key, status: response.status, contentType, bodyKind: kind },
     );
   }
-  if (kind === 'empty') return { found: false };
+  return { found: true, text, status: response.status, contentType, kind };
+}
+
+/**
+ * Read a JSON value.
+ *
+ * Absence yields `{found: false}`. Anything else — a misroute, a rejected
+ * credential, an unparseable body — throws `KvError`.
+ */
+export async function kvGetJson<T>(key: string, signal?: AbortSignal): Promise<KvResult<T>> {
+  const read = await readKv(key, signal, 'application/json');
+  if (!read.found) return read;
+  if (read.kind === 'empty') return { found: false };
   try {
-    return { found: true, value: JSON.parse(text) as T };
+    return { found: true, value: JSON.parse(read.text) as T };
   } catch {
     throw new KvError(
-      `KV read of ${key} returned a ${kind} body that is not JSON`,
-      { key, status: response.status, contentType, bodyKind: kind },
+      `KV read of ${key} returned a ${read.kind} body that is not JSON`,
+      { key, status: read.status, contentType: read.contentType, bodyKind: read.kind },
     );
   }
+}
+
+/**
+ * Read a raw text value — e.g. one the app's `proxies.yml` injects as a
+ * header — exactly as stored, with no JSON parsing.
+ *
+ * `null` only for the store's genuine missing-key answer (404 + JSON
+ * `{"message":"Key not found"}`), the same test `kvGetJson` uses. A
+ * misroute (an HTML body, whatever the status), a rejected credential or
+ * any other failure throws `KvError` rather than reading as "unset". A
+ * stored empty string reads back as `''`, not `null`. The consequence of
+ * the HTML rule: a value that itself begins with `<html` or `<!doctype
+ * html` cannot be told from a misroute and throws.
+ */
+export async function kvGetText(key: string, signal?: AbortSignal): Promise<string | null> {
+  const read = await readKv(key, signal, 'text/plain, application/json;q=0.9, */*;q=0.1');
+  return read.found ? read.text : null;
 }
 
 /**

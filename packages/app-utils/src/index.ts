@@ -37,13 +37,22 @@ export {
 export {
   KvError,
   kvGetJson,
+  kvGetText,
   kvPutJson,
   kvPutText,
   memberKey,
   parseMemberKey,
   type KvResult,
 } from './kv.js';
-export { loadSettings, saveSettings, saveSettingsResult, type AppSettings } from './settings.js';
+export {
+  loadSettings,
+  saveSettings,
+  saveSettingsResult,
+  DEFAULT_SETTINGS_KEY,
+  type AppSettings,
+  type SettingsKeyOptions,
+  type SaveSettingsOptions,
+} from './settings.js';
 export { loadDotEnv } from './dotenv.js';
 export {
   reconcile,
@@ -65,6 +74,7 @@ export {
   applyProvisioningActions,
   validateProvisionerPlan,
   type NotificationResult,
+  type NotificationTargetResult,
   type ProvisionPlanValidator,
 } from './provisioner.js';
 export {

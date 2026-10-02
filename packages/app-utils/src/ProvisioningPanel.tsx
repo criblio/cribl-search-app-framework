@@ -28,6 +28,7 @@ import {
   type ProvisionedSearch,
   type HttpClient,
   type NotificationResult,
+  type NotificationTargetResult,
 } from './provisioner.js';
 import { ProvisionPlanError, type ProvisionProblem } from './provision-guard.js';
 import {
@@ -76,6 +77,10 @@ export interface ProvisioningPanelProps {
    * e.g. ensure a notification target + binding. Receives the same
    * browser HTTP client; return a result row per step. Thrown errors are
    * caught and surfaced as a failed step, never failing the reconcile.
+   *
+   * Runs AFTER notification bindings, so do not create a notification
+   * target here for a binding in `config.notifications` — declare it in
+   * `config.notificationTargets`, which is ensured before the bindings.
    */
   afterReconcile?: (http: HttpClient) => Promise<ProvisioningExtraStep[]>;
   /**
@@ -97,12 +102,22 @@ export function canarySteps(report: ProvisionCanaryReport): ProvisioningExtraSte
   }));
 }
 
-function notificationSteps(results: NotificationResult[]): ProvisioningExtraStep[] {
-  return results.map((n) => ({
+/** Result rows for the notification half of an apply: each target
+ * ensured, then each binding — the order they ran in. */
+export function notificationSteps(
+  results: NotificationResult[],
+  targets: NotificationTargetResult[] = [],
+): ProvisioningExtraStep[] {
+  const targetRows = targets.map((t) => ({
+    label: `Notification target: ${t.targetId}${t.ok && t.detail ? ` (${t.detail})` : ''}`,
+    ok: t.ok,
+    detail: t.error,
+  }));
+  return [...targetRows, ...results.map((n) => ({
     label: `Notification ${n.step}: ${n.searchId}${n.ok && n.detail ? ` (${n.detail})` : ''}`,
     ok: n.ok,
     detail: n.error,
-  }));
+  }))];
 }
 
 function countByKind(actions: PlanAction[]): Record<PlanAction['kind'], number> {
@@ -204,10 +219,11 @@ export default function ProvisioningPanel({
       // The same apply path as reconcile(): re-validates (so this button
       // can never write a plan the guard refuses), seeds lookups — every
       // `| lookup <name>` search fails to create without them — then
-      // unbinds deleted searches, writes, and binds notifications.
+      // unbinds deleted searches, writes, ensures `notificationTargets`,
+      // and binds notifications.
       // Preview stays read-only; all of that is a write.
-      const { results, notifications } = await applyProvisioningActions(http, config, actions);
-      const extra: ProvisioningExtraStep[] = notificationSteps(notifications);
+      const { results, notifications, targets } = await applyProvisioningActions(http, config, actions);
+      const extra: ProvisioningExtraStep[] = notificationSteps(notifications, targets);
       // App-specific post-reconcile steps (e.g. webhook target + binding).
       // Runs after the searches so anything they depend on exists; a
       // throw becomes a failed step rather than failing the whole apply.

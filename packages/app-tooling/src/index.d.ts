@@ -11,6 +11,8 @@ export type { CreateReleaseEvidenceOptions, ReleaseMetadata } from './release-ev
 export { deployApp, installUploadedPack } from './deploy.js';
 export type {
   DeployAppOptions,
+  DeployDryRunPlan,
+  DeployDryRunResult,
   DeployPackageInfo,
   DeployResult,
   InstallResult,

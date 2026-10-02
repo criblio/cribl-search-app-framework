@@ -95,10 +95,21 @@ function linkEndId<N extends ForceNode>(end: SimulationLinkDatum<N>['source']): 
   return typeof end === 'object' ? (end as N).id : String(end);
 }
 
-function topoKey<N extends ForceNode, L extends ForceLink<N>>(nodes: N[], links: L[]): string {
+/**
+ * Structural identity of the graph: the effect that (re)creates the
+ * simulation depends on it. Links are identified by `linkKeys` — their own
+ * `id` when they carry one — plus their endpoints. Keying on
+ * `source>target` alone missed a pair whose only edge changed kind (APM:
+ * rpc → messaging, so its id changed): the key stayed put, the simulation
+ * was kept, the new id matched no live link in the data-only update, and
+ * the old kind and metrics stuck until something else changed the
+ * topology. Exported for tests; not part of the package surface.
+ */
+export function topoKey<N extends ForceNode, L extends ForceLink<N>>(nodes: N[], links: L[]): string {
   const nk = nodes.map((n) => n.id).sort().join(',');
+  const keys = linkKeys(links);
   const lk = links
-    .map((l) => `${linkEndId<N>(l.source)}>${linkEndId<N>(l.target)}`)
+    .map((l, i) => `${keys[i]}=${linkEndId<N>(l.source)}>${linkEndId<N>(l.target)}`)
     .sort()
     .join(',');
   return `${nk}|${lk}`;

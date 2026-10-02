@@ -7,6 +7,7 @@ import { clearBearerTokenCache } from '@criblio/app-utils/auth';
 import {
   appFrame,
   appFrameSelector,
+  appIdFromPath,
   appPathFor,
   criblCredentialsFromEnv,
   dismissHostAnnouncements,
@@ -125,6 +126,35 @@ test('gotoApp lands on the app path, waits for its iframe, and returns the frame
   assert.deepEqual(log[1], ['waitFor', appFrameSelector('apm'), 'attached']);
   assert.deepEqual(frame, { frameFor: appFrameSelector('apm') });
   assert.deepEqual(appFrame(page, 'apm'), frame);
+});
+
+test('appIdFromPath parses /app-ui/<id>/ and rejects anything else clearly', () => {
+  assert.equal(appIdFromPath('/app-ui/apm/'), 'apm');
+  assert.equal(appIdFromPath('/app-ui/apm'), 'apm');
+  assert.equal(appIdFromPath('/app-ui/apm-lab/traces?x=1'), 'apm-lab');
+  assert.equal(appIdFromPath('https://main-x.cribl.cloud/app-ui/apm/'), 'apm');
+  for (const bad of ['/apps/a/apm', 'apm', '/app-ui/', '/app-ui//', '', undefined, '/app-ui/a"]b/']) {
+    assert.throws(() => appIdFromPath(bad), /app path must look like \/app-ui\/<app-id>\/|app id must match/, String(bad));
+  }
+});
+
+test('gotoApp and appFrame accept { appPath } without a separate app id', async () => {
+  const log = [];
+  const page = {
+    goto: async (url, opts) => log.push(['goto', url, opts.waitUntil]),
+    locator: (sel) => fakeLocator(log, sel),
+    frameLocator: (sel) => ({ first: () => ({ frameFor: sel }) }),
+    getByRole: (role, opts) => fakeLocator(log, `${role}:${opts.name}`),
+  };
+  const frame = await gotoApp(page, { appPath: '/app-ui/apm-staging/', path: '/traces' });
+  assert.deepEqual(log[0], ['goto', '/app-ui/apm-staging/traces', 'domcontentloaded']);
+  assert.deepEqual(log[1], ['waitFor', appFrameSelector('apm-staging'), 'attached']);
+  assert.deepEqual(frame, { frameFor: appFrameSelector('apm-staging') });
+  assert.deepEqual(appFrame(page, { appPath: '/app-ui/apm-staging/' }), frame);
+  // The original positional forms are unchanged.
+  assert.deepEqual(appFrame(page, 'apm-staging'), frame);
+  await assert.rejects(gotoApp(page, {}), /pass an app id, or \{ appPath \}/);
+  await assert.rejects(gotoApp(page, { appPath: '/apps/a/apm' }), /app path must look like/);
 });
 
 test('dismissHostAnnouncements clicks the exact Continue only for a known, visible announcement', async () => {

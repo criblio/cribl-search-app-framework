@@ -26,8 +26,9 @@ announcement modals over everything that swallow the first click.
 | `loadTestEnv(path?, env?)` | Merge `.env` into `process.env` without overriding CI secrets. Sync, for config files. |
 | `criblCredentialsFromEnv(env?)` | `{ baseUrl, clientId, clientSecret }` from `CRIBL_BASE_URL` / `CRIBL_CLIENT_ID` / `CRIBL_CLIENT_SECRET`, naming any missing. |
 | `installCriblHostGlobals(page, { appId? , appPath?, baseUrl, clientId, clientSecret })` | `addInitScript` that sets the host globals and a fetch wrapper adding the Bearer token to API calls only. Token from `getCachedBearerToken` (one exchange per process, refreshed 60 s before expiry). |
-| `gotoApp(page, appId, { path?, appPath?, timeoutMs? })` → `FrameLocator` | Navigate, wait for the app iframe to attach, dismiss host announcements. |
-| `appFrame(page, appId)` → `FrameLocator` | The app's iframe (`iframe[src*="/app-ui/<app>/"]`). Every in-app locator goes through it. |
+| `gotoApp(page, appId, { path?, appPath?, timeoutMs? })` or `gotoApp(page, { appPath, path?, timeoutMs? })` → `FrameLocator` | Navigate, wait for the app iframe to attach, dismiss host announcements. The second form parses the id from `appPath`. |
+| `appFrame(page, appId \| { appPath })` → `FrameLocator` | The app's iframe (`iframe[src*="/app-ui/<app>/"]`). Every in-app locator goes through it. |
+| `appIdFromPath(appPath)` | `/app-ui/<id>/` (full URL or deep path accepted) → `<id>`; a clear error for any other shape. |
 | `dismissHostAnnouncements(page, signatures?)` | Best-effort exact-"Continue" click on known host modals (`KNOWN_HOST_ANNOUNCEMENTS`). |
 | `loginSetup(page, { email, password, storageStatePath? })` | Auth0 two-step login (and a federated IdP branch) that saves storage state. |
 | `runSearch(credentials, kql, options?)` → rows | `createNodeHttpClient` + `runSearchJob` with a 150 s budget for queued staging pools. |
@@ -108,6 +109,15 @@ const creds = criblCredentialsFromEnv();
 test('home renders live data', async ({ page }) => {
   await installCriblHostGlobals(page, { ...creds, appId: APP_ID });
   const app = await gotoApp(page, APP_ID);
+  await expect(app.getByRole('heading', { name: 'Overview' })).toBeVisible();
+});
+
+// An app path override (a renamed or side-by-side install) needs no second
+// variable for the id: pass the path and the helpers parse it.
+test('home renders at an overridden path', async ({ page }) => {
+  const appPath = process.env.MY_APP_PATH ?? `/app-ui/${APP_ID}/`;
+  await installCriblHostGlobals(page, { ...creds, appPath });
+  const app = await gotoApp(page, { appPath });
   await expect(app.getByRole('heading', { name: 'Overview' })).toBeVisible();
 });
 

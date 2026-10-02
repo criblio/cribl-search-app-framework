@@ -153,7 +153,9 @@ Bind a scheduled search to a notification target with
 `ensureSavedSearchNotification(http, { searchId, targetId, conf })` from
 `@criblio/app-utils/notifications`, or declare
 `ProvisionerConfig.notifications`. `schedule.notifications` in the
-saved-search body is silently dropped by the server.
+saved-search body is silently dropped by the server. A target the app
+creates belongs in `ProvisionerConfig.notificationTargets` (ensured before
+the bindings), not in `afterReconcile`, which runs after them.
 
 ### Lookup seeding
 `| export to lookup` requires the lookup to exist at search creation
@@ -211,7 +213,9 @@ evaluator runs after the data it depends on is available — with
 `offsetCron(getSearchCadenceCron(), 1)` from `@criblio/app-utils/cadence`,
 not a regex. Rewriting `* * * * *` to `1 * * * *` turns the 1m cadence
 into an hourly one; `offsetCron` leaves every-minute alone and shifts
-`*/5` to `1-59/5`.
+`*/5` to `1-59/5`. The shift is relative to its input and composes
+(`1-59/5` + 2 → `3-59/5`), so always offset the source's cron, not a
+schedule that is already offset.
 
 ## UI patterns
 

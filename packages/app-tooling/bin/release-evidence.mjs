@@ -1,19 +1,31 @@
 #!/usr/bin/env node
+import { parseArgsOrExit } from '../src/cli-args.mjs';
 import { createReleaseEvidence } from '../src/release-evidence.mjs';
 
+const USAGE = `Usage: cribl-app-release-evidence [options]
+
+Write checksum, SBOM and provenance metadata for the release artifact.
+
+Options:
+  --artifact <path>            Artifact to attest (default build/<name>-<version>.tgz)
+  --proxies-manifest <path>    Require the packaged proxies.yml to equal this file
+  --require-empty-proxies      Refuse any external proxy capability
+  -h, --help                   Show this help`;
+
+const { values } = parseArgsOrExit(process.argv.slice(2), {
+  flags: {
+    '--artifact': 'string',
+    '--proxies-manifest': 'string',
+    '--require-empty-proxies': 'boolean',
+  },
+}, { command: 'cribl-app-release-evidence', usage: USAGE });
+
 try {
-  const args = process.argv.slice(2);
-  const requireEmptyProxies = args.includes('--require-empty-proxies');
-  const artifactIndex = args.indexOf('--artifact');
-  const artifact = artifactIndex >= 0 ? args[artifactIndex + 1] : undefined;
-  const manifestIndex = args.indexOf('--proxies-manifest');
-  const proxiesManifest = manifestIndex >= 0 ? args[manifestIndex + 1] : undefined;
-  if (manifestIndex >= 0 && !proxiesManifest) throw new Error('--proxies-manifest requires a path');
   const metadata = await createReleaseEvidence({
     root: process.cwd(),
-    artifact,
-    requireEmptyProxies,
-    proxiesManifest,
+    artifact: values['--artifact'],
+    requireEmptyProxies: values['--require-empty-proxies'] === true,
+    proxiesManifest: values['--proxies-manifest'],
   });
   console.log(`Release evidence created for ${metadata.artifact_sha256}`);
 } catch (error) {
