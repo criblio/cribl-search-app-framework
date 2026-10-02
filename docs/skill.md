@@ -124,7 +124,11 @@ Use `fireAfter` (consecutive bad evaluations before firing) and
 Make scheduled search cadence configurable via a Settings page
 dropdown. Store in KV, read by both browser and CLI provisioners.
 Derive eval cadence (1 minute offset) from panel cadence so the
-evaluator runs after the data it depends on is available.
+evaluator runs after the data it depends on is available — with
+`offsetCron(getSearchCadenceCron(), 1)` from `@criblio/app-utils/cadence`,
+not a regex. Rewriting `* * * * *` to `1 * * * *` turns the 1m cadence
+into an hourly one; `offsetCron` leaves every-minute alone and shifts
+`*/5` to `1-59/5`.
 
 ## UI patterns
 

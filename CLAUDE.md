@@ -233,6 +233,9 @@ a confident answer about an image the model never saw.
 
 - `CADENCE_OPTIONS / DEFAULT_CADENCE / cadenceToCron` — cadence
   catalog and cron mapper
+- `offsetCron(cron, minutes)` — stagger a dependent search after its
+  source at the same cadence (`*/5` → `1-59/5`; every-minute is left
+  alone, never rewritten to an hourly `1 * * * *`)
 - `getSearchCadence / setSearchCadence / subscribeSearchCadence /
   getSearchCadenceCron` — module-level pub/sub for the active
   scheduled-search cadence
@@ -243,8 +246,9 @@ a confident answer about an image the model never saw.
 - `getCurrentDataset / setCurrentDataset / subscribeDataset` —
   module-level pub/sub for the active Cribl dataset
 - `useDataset()` — React hook backed by `useSyncExternalStore`
-- `<DatasetProvider defaultDataset>` — loads the saved dataset
-  from `loadSettings()` on mount and pushes it into the store
+- `<DatasetProvider defaultDataset>` — puts `defaultDataset` in the
+  store before children render (only if the store is empty), then loads
+  the saved dataset and pushes it in; nothing saved ⇒ the app default
 - Pair with `<Outlet key={dataset} />` in your shell so route
   subtrees fully remount on dataset change.
 
@@ -255,8 +259,10 @@ a confident answer about an image the model never saw.
   flow with a two-click "Unprovision all" escape hatch
 - `<Banner>` + `useProvisioningBanners(sources)` — persistent
   banners at the top of any page when provisioning is incomplete.
-  Router-agnostic — caller supplies their own `<Link>` to the
-  Settings page.
+  A source that throws yields an `info` "Couldn't check …" banner,
+  never silence. Router-agnostic — caller supplies their own `<Link>`
+  to its configuration page (route it at `/configuration`: the host
+  shell intercepts app routes containing "settings").
 
 **Dataset-level provisioner** (`@cribl/app-utils/dataset-provisioner`)
 
@@ -394,16 +400,19 @@ When making framework changes:
    ship to every NEW app, but do NOT auto-propagate to existing
    apps — those copies were taken at scaffold time.
 3. Consumer apps pull `@criblio/app-utils` and `@criblio/app-tooling`
-   as versioned deps from GitHub Packages, so framework changes reach
-   them through a publish plus a semver bump — not a `file:` path or a
-   SHA pin. Skeleton CI installs from the registry the same way, which
-   is what keeps the template honest about what a real app resolves.
+   as versioned deps from public **npmjs** (`publish.yml` publishes every
+   workspace version not yet there on each master push; GitHub Packages
+   holds only the old 0.5–0.8 line and gets nothing new), so framework
+   changes reach them through a publish plus a semver bump — not a
+   `file:` path or a SHA pin. Skeleton CI installs from npmjs the same
+   way, with no credential, which is what keeps the template honest
+   about what a real app resolves.
 4. Run `npm test && npm run typecheck` inside `packages/app-utils/`;
    consumers run their own lint + build as an integration gate.
 
 **A version bump takes TWO PRs, and the second one is the skeleton.**
 The `skeleton` CI job scaffolds the template and `npm install`s from
-GitHub Packages, so `skeleton/package.json` may only name a version that
+npmjs, so `skeleton/package.json` may only name a version that
 is already **published** — and publishing happens on the master push,
 after the bump merges. Raising `@criblio/app-utils` to `^0.8.0` in the
 same PR that sets `version: 0.8.0` fails that job with

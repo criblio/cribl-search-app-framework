@@ -42,12 +42,16 @@ export interface ProvisionedSearch {
     tz: string;
     keepLastN: number;
     /**
-     * Optional notification config, passed through verbatim to the
-     * saved search's `schedule.notifications` (the Cribl API's own
-     * shape: `{ items: [{ condition, targets, conf, targetConfigs,
-     * group }] }`). A search that reaches a result threshold fires
-     * its targets — e.g. a webhook target POSTing the results
-     * somewhere. Omit for searches that only materialize data.
+     * Sent as the saved search's `schedule.notifications`, but **the
+     * server does not store it**: an inline notification is dropped and
+     * the saved search reads back with `notifications: {}`. A notification
+     * that actually fires is a separate `/notifications` resource bound
+     * to the saved search by id, which this provisioner does not manage.
+     *
+     * Kept so existing plans still type-check, and excluded from drift
+     * detection: compared against the `{}` the server returns it never
+     * matched, so every reconcile reported an update and re-patched the
+     * search forever. Omit it.
      */
     notifications?: unknown;
   };
@@ -206,32 +210,11 @@ function isSameAsPlan(want: ProvisionedSearch, cur: SavedSearchRow): boolean {
   for (const key of Object.keys(wantSchedule)) {
     if (wantSchedule[key] !== serverSchedule[key]) return false;
   }
-  // Notifications, when the plan specifies them, must be present on
-  // the server — but the server echoes back extra keys (status, ids),
-  // so require only that the plan's fields are a deep subset rather
-  // than an exact match, otherwise every reconcile would see a diff
-  // and re-patch forever.
-  if (want.schedule.notifications !== undefined) {
-    if (!deepSubset(want.schedule.notifications, serverSchedule.notifications)) {
-      return false;
-    }
-  }
+  // `schedule.notifications` is deliberately not compared. The server
+  // drops inline notifications and reads back `{}`, so a plan that sets
+  // them never matched and every reconcile re-patched the search forever.
+  // See `ProvisionedSearch.schedule.notifications`.
   return true;
-}
-
-/** True when every value present in `want` is present and equal in
- *  `cur` (arrays compared element-wise at equal length). Extra keys
- *  in `cur` are ignored. */
-function deepSubset(want: unknown, cur: unknown): boolean {
-  if (Array.isArray(want)) {
-    return Array.isArray(cur) && want.length === cur.length && want.every((w, i) => deepSubset(w, cur[i]));
-  }
-  if (want && typeof want === 'object') {
-    if (!cur || typeof cur !== 'object' || Array.isArray(cur)) return false;
-    const c = cur as Record<string, unknown>;
-    return Object.entries(want as Record<string, unknown>).every(([k, v]) => deepSubset(v, c[k]));
-  }
-  return want === cur;
 }
 
 export async function applyProvisioningPlan(

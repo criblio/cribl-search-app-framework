@@ -78,3 +78,65 @@ export function subscribeSearchCadence(fn: () => void): () => void {
     listeners.delete(fn);
   };
 }
+
+/**
+ * Shift the minute field of a 5-field cron so a DEPENDENT search runs
+ * `minutes` after the search it reads, at the same cadence.
+ *
+ *   offsetCron('*\/5 * * * *', 1)  → '1-59/5 * * * *'   (1, 6, 11, …)
+ *   offsetCron('7 * * * *', 2)     → '9 * * * *'
+ *   offsetCron('* * * * *', 1)     → '* * * * *'        (unchanged)
+ *
+ * Every-minute stays every-minute. There is no later slot within a
+ * one-minute period, and the naive rewrite — `* ` → `1 ` — turns "every
+ * minute" into "minute 1 of every hour": APM did exactly that, so at the
+ * 1m cadence its dependent searches ran hourly. A dependent at the 1m
+ * cadence reads the previous minute's output instead.
+ *
+ * Rules, applied to the minute field only:
+ *   - `*` or `*\/1`             → unchanged
+ *   - `*\/N` or `a-59/N` (a < N) → `k-59/N`, k = (a + minutes) mod N;
+ *     a k of 0 is written back as `*\/N`
+ *   - a single minute `m`      → (m + minutes) mod 60, when the hour field
+ *     is `*`. Under a restricted hour field a wrap past :59 would move the
+ *     run BEFORE its source rather than after, so that case is unchanged.
+ *   - anything else (lists, ranges, other steps, not 5 fields, a
+ *     non-integer offset) → unchanged. Returning the input is always safe:
+ *     the dependent may read one period late, but it never changes cadence.
+ */
+export function offsetCron(cron: string, minutes: number): string {
+  if (!Number.isInteger(minutes)) return cron;
+  const fields = cron.trim().split(/\s+/);
+  if (fields.length !== 5) return cron;
+  const [minute, hour, ...rest] = fields as [string, string, string, string, string];
+
+  const shifted = shiftMinuteField(minute, hour, minutes);
+  if (shifted === null || shifted === minute) return cron;
+  return [shifted, hour, ...rest].join(' ');
+}
+
+const mod = (n: number, m: number) => ((n % m) + m) % m;
+
+function shiftMinuteField(minute: string, hour: string, by: number): string | null {
+  if (minute === '*') return null;
+
+  const step = /^(?:\*|(\d{1,2})-59)\/(\d{1,2})$/.exec(minute);
+  if (step) {
+    const start = step[1] === undefined ? 0 : Number(step[1]);
+    const n = Number(step[2]);
+    if (n < 1 || n > 59 || start >= n) return null;
+    if (n === 1) return null; // every minute, spelled `*/1`
+    const k = mod(start + by, n);
+    return k === 0 ? `*/${n}` : `${k}-59/${n}`;
+  }
+
+  if (/^\d{1,2}$/.test(minute)) {
+    const m = Number(minute);
+    if (m > 59) return null;
+    const next = m + by;
+    if (hour !== '*' && (next < 0 || next > 59)) return null;
+    return String(mod(next, 60));
+  }
+
+  return null;
+}

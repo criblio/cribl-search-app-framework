@@ -62,9 +62,13 @@ export function withGenerationSignal(signal?: AbortSignal): AbortSignal {
  * Snapshot the current generation and return a predicate that reports
  * whether it is still the live one. A view captures this at the top of
  * its fetch (right after `newQueryGeneration()`) and guards every async
- * `setState` with it, so a stale read that resolves late — including an
- * aborted metrics read that now resolves to `[]` — cannot clobber the
- * data of the navigation that superseded it.
+ * `setState` with it, so a stale read that settles late cannot clobber
+ * the data of the navigation that superseded it. An aborted metrics read
+ * does not resolve to `[]`: it REJECTS — with the signal's abort reason
+ * (`signal.throwIfAborted()` before and after the transport, or the
+ * transport's own `AbortError`), or with `MetricsQueryError('cancelled')`
+ * when the server reports the job cancelled. So guard the `catch` path
+ * too, or a superseded read paints an error over the live view.
  */
 export function captureQueryGeneration(): () => boolean {
   const mine = current().signal;
