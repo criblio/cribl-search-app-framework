@@ -1,4 +1,4 @@
-export { runQuery, apiUrl } from './search.js';
+export { runQuery, apiUrl, runWithLimit, runWithLimitSettled, type RunWithLimitOptions } from './search.js';
 export {
   runSearchJob,
   SearchJobError,
@@ -134,3 +134,4 @@ export {
   withGenerationSignal,
   captureQueryGeneration,
 } from './query-generation.js';
+export { createStore, useStore, type Store } from './store.js';

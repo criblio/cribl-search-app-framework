@@ -139,6 +139,23 @@ on the initial load (no data yet). Each panel updates in place when
 its query resolves. Show a thin progress bar to indicate a refresh
 is in progress.
 
+### Bounded search fan-out
+Never fire one search per item with a bare `Promise.all`. Cribl Search
+allows ~20 concurrent jobs per cluster (`Search queue limit reached
+(max: 20)`), the page already holds several, and the overflow returns
+429s — APM's 22-query Spotlight did exactly that. Use
+`runWithLimit(items, 4, worker, { signal })` from
+`@criblio/app-utils/search` (or `runWithLimitSettled` for per-item
+errors); results come back in input order and one failure never stops
+the rest.
+
+### Shared app state
+Feature flags and other values that query builders read outside React
+belong in `createStore(initial)` from `@criblio/app-utils/store`, read
+in components with `useStore(store)`. Give every flag an explicit
+default that is safe when KV is unreachable — normally OFF, so a new
+feature ships dark.
+
 ### Graph stability
 When using d3-force or similar layout engines, compute a topology
 key from node IDs + link endpoints. Only recreate the simulation

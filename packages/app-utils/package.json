@@ -42,7 +42,8 @@
     "./styles/tokens.css": "./dist/styles/tokens.css",
     "./styles/base.css": "./dist/styles/base.css",
     "./styles.css": "./dist/styles.css",
-    "./graph": "./dist/graph/index.js"
+    "./graph": "./dist/graph/index.js",
+    "./store": "./dist/store.js"
   },
   "peerDependencies": {
     "d3-array": "^3.2.0",
