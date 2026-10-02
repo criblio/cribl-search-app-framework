@@ -244,6 +244,35 @@ const { phase, failures, retry, refresh } = usePageLoad(async ({ isCurrent, fail
 // Polling: setInterval(() => refresh({ silent: true }), 60_000)
 ```
 
+A silent poll is a load like any other by default: a transient poll error
+shows the banner and a lucky poll clears a real one. Pass
+`{ silentFailures: 'keep' }` when polls must do neither — only mount, a
+deps change or `retry` then changes the load's failures. The loader can also
+read `ctx.silent`.
+
+Failures from effects OUTSIDE the loader (a deferred panel, an alert
+history fetch) go through `report`, not a second `usePageLoad` — a second
+loader starts its own query generation and aborts this one's reads. A
+settling load replaces only the keys it reported, so these survive it; only
+`report(key, null)` clears one:
+
+```tsx
+const { report, token } = pageLoad;
+useEffect(() => {
+  const t = token(); // changes on deps change/unmount, not retry/refresh
+  fetchAlertHistory(service, range)
+    .then(() => report('Alert history', null, t))
+    .catch((e) => report('Alert history', e, t));
+}, [service, range, report, token]);
+```
+
+Pass the token only from an effect that re-runs whenever the page's deps
+change; otherwise omit it and use the effect's own cleanup flag.
+
+`relativeTimeMs('now')` is `0`, not `null`, so `relativeTimeMs(r) ?? 3_600_000`
+silently keeps a 0 ms window. Use `durationMs(r, fallback)` for a window
+length — it falls back for unparseable and zero-length ranges alike.
+
 ### Partial failures are not health
 A failed query must never render as an empty table or "0 errors". Show
 `<PartialFailureBanner failures={failures} onRetry={retry} />`

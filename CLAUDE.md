@@ -513,9 +513,14 @@ const kql = `${evaluatorRows}\n${alertStateKql({ fireAfter: 2, clearAfter: 3 })}
 - `TIME_RANGES: readonly TimeRangeOption[]` (`{ label, value, binSeconds }`,
   15m/1h/6h/24h), `binSecondsFor(range, ranges?) → number`,
   `previousWindow(earliest, latest = 'now') → { earliest, latest } | null`,
-  `relativeTimeMs(rel) → number | null`. Pure, cell-safe. Unparseable
-  input is `null`, never a one-hour guess — a guessed window makes a "vs
-  previous" delta lie. `previousWindow('-1h')` → `{ earliest: '-2h', latest: '-1h' }`.
+  `relativeTimeMs(rel) → number | null`, `durationMs(range, fallback) →
+  number`. Pure, cell-safe. Unparseable input is `null`, never a one-hour
+  guess — a guessed window makes a "vs previous" delta lie.
+  `previousWindow('-1h')` → `{ earliest: '-2h', latest: '-1h' }`.
+  **`relativeTimeMs('now')` is `0`, not `null`, so `relativeTimeMs(r) ??
+  3_600_000` keeps the 0** and a rate divided by that window is wrong. For
+  a lookback window's length use `durationMs(r, fallback)`, which falls back
+  for both unparseable and zero-length ranges.
 - `useQueryParam(name, default, { legacy?, history?: 'replace' | 'push' })
   → [value, set]` and `useRangeParam(default, opts)` (`?range=`). One
   functional `setSearchParams` write that omits the param at its default
@@ -525,15 +530,30 @@ const kql = `${evaluatorRows}\n${alertStateKql({ fireAfter: 2, clearAfter: 3 })}
   router — `react-router-dom` is an optional peer for this subpath alone,
   and it is never re-exported from the root.
   `const [range, setRange] = useRangeParam('-1h', { legacy: ['lookback'] });`
-- `usePageLoad(load, deps, { errorKey? }) → { phase: 'initial' |
-  'refreshing' | 'idle', failures, updatedAt, retry(), refresh({ silent? }) }`,
-  `load(ctx: { signal, isCurrent, fail(key, err), ok(key) })`. Full
+- `usePageLoad(load, deps, { errorKey?, silentFailures?: 'replace' | 'keep' })
+  → { phase: 'initial' | 'refreshing' | 'idle', failures, updatedAt, retry(),
+  refresh({ silent? }), report(key, err | null, token?), token() }`,
+  `load(ctx: { silent, signal, isCurrent, fail(key, err), ok(key) })`. Full
   loading only before the first load settles; each load is a new query
   generation; superseded results and aborted reads never become failures;
-  `failures` is replaced when a load settles, not cleared when it starts
-  (no banner flicker on polls). Own subpath so `/query-generation` stays
-  React-free for cells. `createPageLoadController` is the same machine
-  without React. One per page.
+  the load's own failures are replaced when it settles, not cleared when it
+  starts (no banner flicker on polls). Own subpath so `/query-generation`
+  stays React-free for cells. `createPageLoadController` is the same
+  machine without React (it has `report`/`token` too). One per page.
+  - `silentFailures: 'keep'` — a `refresh({ silent: true })` poll can
+    neither show nor clear a load failure (its `fail`/`ok` are no-ops and
+    its settle leaves them); only mount, a deps change or `retry` changes
+    them. Default `'replace'` is the old behaviour. APM's Alerts page polls
+    every 30 s and must not flash or hide its error on a poll.
+  - `report(key, err | null, token?)` — failures from sibling effects
+    OUTSIDE the loader (APM ServiceDetail's deferred KQL panels, alert
+    status/history, metric cards). Owned separately: a settling load
+    replaces only its own keys, so it no longer wipes theirs, and only
+    `report(key, null)` clears one. Use distinct keys from the loader's.
+    Aborts are ignored. `token()` changes on a deps change or unmount, not on
+    retry/refresh; pass one captured in the effect to drop a report from a
+    superseded page — but only from an effect that re-runs with the page's
+    deps, or its report goes stale and is dropped for good.
 - `<PartialFailureBanner failures={Record | Map} onRetry? />` — Capra
   `Alert`: "Some data is unavailable. Empty values below are not evidence
   of health." plus one line per failed panel and a Retry button.

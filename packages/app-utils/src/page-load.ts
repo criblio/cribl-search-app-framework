@@ -17,9 +17,24 @@
  *
  * Failures are keyed by panel. The previous load's failures stay visible
  * while a new load runs (resetting them at the start made the banner
- * flicker off and on with every poll); when a load settles, `failures`
- * becomes exactly what that load reported. Render them with
+ * flicker off and on with every poll); when a load settles, the keys the
+ * LOAD owns become exactly what that load reported. Render them with
  * `<PartialFailureBanner>` from `@criblio/app-utils/partial-failure-banner`.
+ *
+ * Two escape hatches, both from APM adopting this hook:
+ *
+ * - **`silentFailures: 'keep'`.** A silent poll (`refresh({ silent: true })`)
+ *   neither shows nor clears load failures: its `fail`/`ok` are no-ops and
+ *   its settle leaves them as they were. APM's Alerts page polls every 30 s
+ *   and a transient poll error must not flash a banner, nor a lucky poll
+ *   hide a real one. The default, `'replace'`, treats a silent run like any
+ *   other. `ctx.silent` tells the loader which kind of run it is.
+ * - **`report(key, err | null, token?)`.** Failures from sibling effects
+ *   outside the loader (APM ServiceDetail's deferred panels, alert history,
+ *   metric cards). They are owned separately: a settling load replaces only
+ *   its own keys, so it no longer wipes theirs, and only `report(key, null)`
+ *   clears them. Pass `token()` captured when the effect started to drop a
+ *   report from before a deps change or an unmount.
  *
  * Its own subpath, not part of `/query-generation`: that module is
  * React-free and reachable from workerd cells (`agent-tools` → `metrics`
@@ -39,6 +54,9 @@ import {
 export type PageLoadPhase = 'initial' | 'refreshing' | 'idle';
 
 export interface PageLoadContext {
+  /** True for a `refresh({ silent: true })` run (polling). With
+   *  `silentFailures: 'keep'`, `fail` and `ok` are no-ops in such a run. */
+  silent: boolean;
   /** This load's generation signal; aborted when a newer load starts.
    *  `runQuery` already defaults to it — pass it to other reads. */
   signal: AbortSignal;
@@ -71,18 +89,38 @@ export interface PageLoad extends PageLoadState {
   /** Re-run the load; `{ silent: true }` (for polling) leaves `phase`
    *  alone. Stable identity. */
   refresh: (options?: { silent?: boolean }) => void;
+  /** Record (`error`) or clear (`null`) a failure from OUTSIDE the loader.
+   *  Externally reported keys survive a settling load. Ignored when `error`
+   *  is an abort, or when `token` is given and stale. Stable identity. */
+  report: (key: string, error: unknown, token?: number) => void;
+  /** The current deps generation, for `report`: it changes when the page's
+   *  deps change or it unmounts, NOT on retry/refresh. Stable identity. */
+  token: () => number;
 }
+
+/** How a silent run (`refresh({ silent: true })`) treats load failures. */
+export type SilentFailurePolicy = 'replace' | 'keep';
 
 export interface PageLoadOptions {
   /** Failure key used when `load` itself rejects. Default `'Page data'`. */
   errorKey?: string;
+  /** `'replace'` (default): a silent run reports and settles failures like
+   *  any other. `'keep'`: a silent run can neither show nor clear a load
+   *  failure; only a non-silent run (mount, deps change, `retry`) changes
+   *  them. Externally `report`ed failures are unaffected either way. */
+  silentFailures?: SilentFailurePolicy;
 }
 
 export interface PageLoadController {
   run: (silent?: boolean) => Promise<void>;
-  /** Supersede any in-flight load without starting another. */
+  /** Supersede any in-flight load without starting another, and advance
+   *  the deps generation `token()` reports (deps change, unmount). */
   invalidate: () => void;
   getState: () => PageLoadState;
+  /** See `PageLoad.report`. */
+  report: (key: string, error: unknown, token?: number) => void;
+  /** See `PageLoad.token`. */
+  token: () => number;
 }
 
 export const INITIAL_PAGE_LOAD_STATE: PageLoadState = Object.freeze({
@@ -93,8 +131,8 @@ export const INITIAL_PAGE_LOAD_STATE: PageLoadState = Object.freeze({
 
 /** An abort is a cancellation, not a failure: the generation signal fired,
  *  a DOM `AbortError`, or a `SearchJobError` of kind `aborted`. */
-function isAbort(error: unknown, signal: AbortSignal): boolean {
-  if (signal.aborted) return true;
+function isAbort(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true;
   if (typeof error !== 'object' || error === null) return false;
   const e = error as { name?: unknown; kind?: unknown };
   return e.name === 'AbortError' || e.kind === 'aborted';
@@ -114,14 +152,23 @@ export function createPageLoadController(
   options?: PageLoadOptions,
 ): PageLoadController {
   const errorKey = options?.errorKey ?? 'Page data';
+  const keepOnSilent = options?.silentFailures === 'keep';
   let state = INITIAL_PAGE_LOAD_STATE;
   let runId = 0;
+  let epoch = 0;
   let hasData = false;
+  // Two owners, published merged. The load's keys are replaced when a load
+  // settles; external keys change only through `report`.
+  let owned: Record<string, string> = {};
+  let external: Record<string, string> = {};
 
   const set = (next: Partial<PageLoadState>): void => {
     state = { ...state, ...next };
     onChange(state);
   };
+  const merged = (): Record<string, string> => ({ ...owned, ...external });
+  const publish = (next: Partial<PageLoadState> = {}): void =>
+    set({ ...next, failures: merged() });
 
   const run = async (silent = false): Promise<void> => {
     newQueryGeneration();
@@ -129,23 +176,27 @@ export function createPageLoadController(
     const signal = currentQuerySignal();
     const id = ++runId;
     const isCurrent = (): boolean => id === runId && generationLive();
+    // A silent run under 'keep' never touches the load's failures.
+    const frozen = silent && keepOnSilent;
     const reported: Record<string, string> = {};
 
     const ctx: PageLoadContext = {
+      silent,
       signal,
       isCurrent,
       fail: (key, error) => {
-        if (!isCurrent() || isAbort(error, signal)) return;
+        if (frozen || !isCurrent() || isAbort(error, signal)) return;
         reported[key] = message(error);
-        set({ failures: { ...state.failures, [key]: reported[key]! } });
+        owned = { ...owned, [key]: reported[key]! };
+        publish();
       },
       ok: (key) => {
-        if (!isCurrent()) return;
+        if (frozen || !isCurrent()) return;
         delete reported[key];
-        if (!(key in state.failures)) return;
-        const failures = { ...state.failures };
-        delete failures[key];
-        set({ failures });
+        if (!(key in owned)) return;
+        owned = { ...owned };
+        delete owned[key];
+        publish();
       },
     };
 
@@ -157,20 +208,37 @@ export function createPageLoadController(
     }
     if (!isCurrent()) return;
     hasData = true;
-    set({ phase: 'idle', failures: { ...reported }, updatedAt: Date.now() });
+    if (!frozen) owned = { ...reported };
+    publish({ phase: 'idle', updatedAt: Date.now() });
+  };
+
+  const report = (key: string, error: unknown, token?: number): void => {
+    if (token !== undefined && token !== epoch) return;
+    // Only `null` clears: a rejection with an `undefined` reason is still a failure.
+    if (error === null) {
+      if (!(key in external)) return;
+      external = { ...external };
+      delete external[key];
+    } else {
+      if (isAbort(error)) return;
+      external = { ...external, [key]: message(error) };
+    }
+    publish();
   };
 
   return {
     run,
-    invalidate: () => { runId++; },
+    invalidate: () => { runId++; epoch++; },
     getState: () => state,
+    report,
+    token: () => epoch,
   };
 }
 
 /**
  * Run `load` on mount and whenever `deps` change; return the lifecycle.
  *
- * `load` receives `{ signal, isCurrent, fail, ok }`. Start every panel's
+ * `load` receives `{ silent, signal, isCurrent, fail, ok }`. Start every panel's
  * read inside it, guard your `setState`s with `isCurrent()`, report each
  * panel's error with `fail(key, err)`, and return a promise that settles
  * when every panel has (await them, or `Promise.allSettled`) — `phase`
@@ -193,6 +261,23 @@ export function createPageLoadController(
  * // phase === 'initial' → skeletons; 'refreshing' → keep data, dim it.
  * // <PartialFailureBanner failures={failures} onRetry={retry} />
  * ```
+ *
+ * A sibling effect outside the loader reports into the same map:
+ *
+ * ```tsx
+ * const { report, token } = pageLoad;
+ * useEffect(() => {
+ *   const t = token(); // after this commit's deps-change invalidation
+ *   loadAlertHistory(service, range)
+ *     .then(() => report('Alert history', null, t))
+ *     .catch((e) => report('Alert history', e, t));
+ * }, [service, range, report, token]);
+ * ```
+ *
+ * Pass the token only when the effect re-runs whenever the page's deps
+ * change (its deps include them): a token from an effect that does NOT
+ * re-run goes stale on the next deps change and its report is dropped for
+ * good. Otherwise omit it and guard with the effect's own cleanup flag.
  */
 export function usePageLoad(
   load: PageLoadFn,
@@ -221,5 +306,5 @@ export function usePageLoad(
     (opts?: { silent?: boolean }) => { void controller.run(opts?.silent ?? false); },
     [controller],
   );
-  return { ...state, retry, refresh };
+  return { ...state, retry, refresh, report: controller.report, token: controller.token };
 }

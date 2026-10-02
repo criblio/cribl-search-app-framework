@@ -20,6 +20,7 @@ import {
   createPageLoadController,
   usePageLoad,
   type PageLoadContext,
+  type PageLoadOptions,
   type PageLoadState,
 } from '../page-load.js';
 import { captureQueryGeneration, newQueryGeneration } from '../query-generation.js';
@@ -32,7 +33,7 @@ function deferred<T = void>() {
 }
 
 /** A controller whose every load waits on a gate the test opens. */
-function harness() {
+function harness(options?: PageLoadOptions) {
   const states: PageLoadState[] = [];
   const loads: Array<{ ctx: PageLoadContext; gate: ReturnType<typeof deferred<void>> }> = [];
   const controller = createPageLoadController(
@@ -42,6 +43,7 @@ function harness() {
       return gate.promise;
     },
     (s) => states.push(s),
+    options,
   );
   const last = () => controller.getState();
   return { controller, states, loads, last };
@@ -208,6 +210,145 @@ describe('failures', () => {
   });
 });
 
+/** Settle the latest load of `h`, failing `fails`' keys first. */
+async function settle(h: ReturnType<typeof harness>, run: Promise<void>, fails: Record<string, unknown> = {}) {
+  const { ctx, gate } = h.loads[h.loads.length - 1]!;
+  for (const [k, e] of Object.entries(fails)) ctx.fail(k, e);
+  gate.resolve();
+  await run;
+}
+
+describe('silent runs (APM Alerts: 30 s polls)', () => {
+  it('ctx.silent says which kind of run the loader is in', () => {
+    const h = harness();
+    void h.controller.run();
+    void h.controller.run(true);
+    expect(h.loads.map((l) => l.ctx.silent)).toEqual([false, true]);
+  });
+
+  it("default 'replace': a silent poll shows and clears failures like any load", async () => {
+    const h = harness();
+    await settle(h, h.controller.run(), { Alerts: new Error('403') });
+    await settle(h, h.controller.run(true));
+    expect(h.last().failures).toEqual({});
+    await settle(h, h.controller.run(true), { Alerts: new Error('blip') });
+    expect(h.last().failures).toEqual({ Alerts: 'blip' });
+  });
+
+  it("'keep': a silent poll that succeeds does not clear the error", async () => {
+    const h = harness({ silentFailures: 'keep' });
+    await settle(h, h.controller.run(), { Alerts: new Error('403') });
+    const poll = h.controller.run(true);
+    h.loads[1]!.ctx.ok('Alerts');
+    expect(h.last().failures).toEqual({ Alerts: '403' });
+    await settle(h, poll);
+    expect(h.last()).toMatchObject({ phase: 'idle', failures: { Alerts: '403' } });
+  });
+
+  it("'keep': a silent poll that fails does not surface it, even a rejected load", async () => {
+    const h = harness({ silentFailures: 'keep' });
+    await settle(h, h.controller.run());
+    const updated = h.last().updatedAt;
+    const poll = h.controller.run(true);
+    h.loads[1]!.ctx.fail('Alerts', new Error('transient'));
+    expect(h.last().failures).toEqual({});
+    h.loads[1]!.gate.reject(new Error('whole poll failed'));
+    await poll;
+    expect(h.last().failures).toEqual({});
+    expect(h.last().updatedAt).toBeGreaterThanOrEqual(updated!);
+    // A late fail from the settled silent run is still ignored.
+    h.loads[1]!.ctx.fail('Alerts', new Error('late'));
+    expect(h.last().failures).toEqual({});
+  });
+
+  it("'keep': a non-silent run (retry, deps change) still replaces failures", async () => {
+    const h = harness({ silentFailures: 'keep' });
+    await settle(h, h.controller.run(), { Alerts: new Error('403') });
+    await settle(h, h.controller.run(false));
+    expect(h.last().failures).toEqual({});
+    await settle(h, h.controller.run(false), { Alerts: new Error('down again') });
+    expect(h.last().failures).toEqual({ Alerts: 'down again' });
+  });
+});
+
+describe('external failures (APM ServiceDetail sibling effects)', () => {
+  it('a settling load replaces only its own keys, not externally reported ones', async () => {
+    const h = harness();
+    const run = h.controller.run();
+    h.controller.report('Alert history', new Error('kv 500'));
+    h.controller.report('Metric cards', 'catalog unreachable');
+    expect(h.last().failures).toEqual({ 'Alert history': 'kv 500', 'Metric cards': 'catalog unreachable' });
+    await settle(h, run, { Latency: new Error('timeout') });
+    expect(h.last().failures).toEqual({
+      Latency: 'timeout',
+      'Alert history': 'kv 500',
+      'Metric cards': 'catalog unreachable',
+    });
+    // The next load recovers its own panel; the external ones stay.
+    await settle(h, h.controller.run(true));
+    expect(h.last().failures).toEqual({ 'Alert history': 'kv 500', 'Metric cards': 'catalog unreachable' });
+  });
+
+  it('only report(key, null) clears an external key; ctx.ok and settle do not', async () => {
+    const h = harness();
+    h.controller.report('Alert status', new Error('x'));
+    const run = h.controller.run();
+    h.loads[0]!.ctx.ok('Alert status');
+    await settle(h, run);
+    expect(h.last().failures).toEqual({ 'Alert status': 'x' });
+    h.controller.report('Alert status', null);
+    expect(h.last().failures).toEqual({});
+    const n = h.states.length;
+    h.controller.report('Alert status', null); // clearing an absent key is a no-op
+    expect(h.states).toHaveLength(n);
+  });
+
+  it('an aborted external read is never a failure; an undefined reason is', () => {
+    const h = harness();
+    h.controller.report('Deferred KQL', new DOMException('aborted', 'AbortError'));
+    h.controller.report('Deferred KQL', Object.assign(new Error('Search was canceled'), { kind: 'aborted' }));
+    expect(h.last().failures).toEqual({});
+    h.controller.report('Deferred KQL', undefined);
+    expect(h.last().failures).toEqual({ 'Deferred KQL': 'undefined' });
+  });
+
+  it('a token survives retry and refresh but not a deps change or unmount', async () => {
+    const h = harness();
+    const t0 = h.controller.token();
+    await settle(h, h.controller.run());
+    await settle(h, h.controller.run(true));
+    expect(h.controller.token()).toBe(t0);
+    h.controller.report('Alert history', new Error('current'), t0);
+    expect(h.last().failures).toEqual({ 'Alert history': 'current' });
+
+    h.controller.invalidate(); // deps changed (or unmounted)
+    const t1 = h.controller.token();
+    expect(t1).not.toBe(t0);
+    h.controller.report('Metric cards', new Error('stale range'), t0);
+    h.controller.report('Alert history', null, t0); // a stale clear is dropped too
+    expect(h.last().failures).toEqual({ 'Alert history': 'current' });
+    h.controller.report('Alert history', null, t1);
+    expect(h.last().failures).toEqual({});
+  });
+
+  it('a report without a token is always applied', () => {
+    const h = harness();
+    h.controller.invalidate();
+    h.controller.invalidate();
+    h.controller.report('Alert status', new Error('no token'));
+    expect(h.last().failures).toEqual({ 'Alert status': 'no token' });
+  });
+
+  it("'keep' does not freeze external reports during a silent poll", async () => {
+    const h = harness({ silentFailures: 'keep' });
+    await settle(h, h.controller.run());
+    const poll = h.controller.run(true);
+    h.controller.report('Alert history', new Error('kv 500'));
+    await settle(h, poll);
+    expect(h.last().failures).toEqual({ 'Alert history': 'kv 500' });
+  });
+});
+
 describe('usePageLoad first render', () => {
   it('renders the initial phase and does not start a load during render', () => {
     let calls = 0;
@@ -221,5 +362,7 @@ describe('usePageLoad first render', () => {
     expect(seen).toMatchObject({ phase: 'initial', failures: {}, updatedAt: null });
     expect(typeof seen!.retry).toBe('function');
     expect(typeof seen!.refresh).toBe('function');
+    expect(typeof seen!.report).toBe('function');
+    expect(seen!.token()).toBe(0);
   });
 });
