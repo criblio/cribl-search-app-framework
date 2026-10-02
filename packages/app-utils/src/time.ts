@@ -50,14 +50,35 @@ function parseRelative(rel: string): Relative | null {
 }
 
 /**
- * Duration of a relative time in milliseconds: `-1h` → 3 600 000,
+ * Offset of a relative time from now, in milliseconds: `-1h` → 3 600 000,
  * `now` → 0. Units s, m, h, d, w. Returns `null` for anything else
  * (absolute times, snapped `@d` forms), so callers decide the fallback.
+ *
+ * **`now` is 0, not null — so `relativeTimeMs(x) ?? fallback` does NOT
+ * fall back for it.** `??` only catches `null`; a range of `now` (or `0`)
+ * yields a 0 ms window, and a rate divided by it or a bin count derived from
+ * it is silently wrong. When you want the length of a lookback window, use
+ * `durationMs(range, fallback)`, which falls back for both.
  */
 export function relativeTimeMs(rel: string): number | null {
   const r = parseRelative(rel);
   if (!r) return null;
   return r.unit ? r.n * UNIT_MS[r.unit] : 0;
+}
+
+/**
+ * Length of the lookback window `range → now`, in milliseconds, or
+ * `fallback` when there is no usable window: unparseable input (`null` from
+ * `relativeTimeMs`) AND a zero-length one (`now`, `0`). The safe form of
+ * `relativeTimeMs(range) ?? fallback`, which keeps the 0.
+ *
+ * `durationMs('-15m', 3_600_000)` → 900 000;
+ * `durationMs('now', 3_600_000)` → 3 600 000;
+ * `durationMs('-1d@d', 3_600_000)` → 3 600 000.
+ */
+export function durationMs(range: string, fallback: number): number {
+  const ms = relativeTimeMs(range);
+  return ms ? ms : fallback;
 }
 
 /**

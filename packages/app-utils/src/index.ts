@@ -211,6 +211,7 @@ export {
   binSecondsFor,
   previousWindow,
   relativeTimeMs,
+  durationMs,
   type TimeRangeOption,
 } from './time.js';
 export {
@@ -224,6 +225,7 @@ export {
   type PageLoadOptions,
   type PageLoadPhase,
   type PageLoadState,
+  type SilentFailurePolicy,
 } from './page-load.js';
 export {
   DEFAULT_BACKFILL_WINDOW_SECONDS,

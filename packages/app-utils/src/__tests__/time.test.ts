@@ -7,7 +7,7 @@
  * against the wrong window and nothing said so. These return `null`.
  */
 import { describe, expect, it } from 'vitest';
-import { TIME_RANGES, binSecondsFor, previousWindow, relativeTimeMs } from '../time.js';
+import { TIME_RANGES, binSecondsFor, durationMs, previousWindow, relativeTimeMs } from '../time.js';
 
 describe('relativeTimeMs', () => {
   it('parses every unit and now', () => {
@@ -23,6 +23,26 @@ describe('relativeTimeMs', () => {
     for (const bad of ['', '1h', '-1y', '-1d@d', '2026-10-02T00:00:00Z', '-h']) {
       expect(relativeTimeMs(bad)).toBeNull();
     }
+  });
+});
+
+describe('durationMs', () => {
+  it('is the window length for a parseable range', () => {
+    expect(durationMs('-15m', 3_600_000)).toBe(900_000);
+    expect(durationMs('-7d', 1)).toBe(604_800_000);
+  });
+
+  // `relativeTimeMs('now') ?? fallback` is 0, not the fallback: `??` only
+  // catches null, and a 0 ms window divides a rate by zero.
+  it('falls back for now and 0, which relativeTimeMs ?? fallback keeps as 0', () => {
+    expect(relativeTimeMs('now') ?? 3_600_000).toBe(0);
+    expect(durationMs('now', 3_600_000)).toBe(3_600_000);
+    expect(durationMs('0', 60_000)).toBe(60_000);
+  });
+
+  it('falls back for what relativeTimeMs cannot parse', () => {
+    expect(durationMs('-1d@d', 3_600_000)).toBe(3_600_000);
+    expect(durationMs('', 42)).toBe(42);
   });
 });
 
