@@ -77,6 +77,14 @@ export interface MetricsBackfillEmitter {
    * skips it. See {@link CoverageSplit}.
    */
   coverageSplit?: CoverageSplit;
+  /**
+   * Restrict the default coverage probe to series with these exact label
+   * values (`{ quantile: 'p95' }` → `count(m{quantile="p95"})`), for an
+   * emitter that writes only some series of a shared family. Unlike
+   * {@link CoverageSplit} it neither requires every value nor probes the
+   * others. Ignored when the probe has a custom `query`.
+   */
+  coverageLabels?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -110,7 +118,10 @@ export interface MetricsBackfillDeps<E extends MetricsBackfillEmitter = MetricsB
    * [earliestMs, latestMs], or null for none. */
   earliestCoveredSec(emitter: E, earliestMs: number, latestMs: number): Promise<number | null>;
   /** Override fixed windows for an emitter — e.g. density-sized windows from a
-   * source-event count ({@link planDensityWindows}). Must tile the gap. */
+   * source-event count ({@link planDensityWindows} with the gap). Must tile
+   * the gap exactly — contiguous, non-overlapping, within it — or the emitter
+   * fails with `status: 'failed'` before any export runs
+   * ({@link windowTilingError}). */
   planWindows?(emitter: E, gap: BackfillWindow): BackfillWindow[] | Promise<BackfillWindow[]>;
   /** Whether a dropping window is worth splitting. Default: unless it dropped
    * every event ({@link isRetryableDrop}). */
@@ -197,17 +208,34 @@ export function planFixedWindows(
  * the cap becomes its own window (the runner splits it further on a drop).
  * For emitters whose output scales with source events (per-event
  * histograms) rather than with time.
+ *
+ * Pass the `gap` being filled and the result tiles it exactly, which is
+ * what {@link runMetricsBackfill} requires of `planWindows`: bins outside
+ * the gap are ignored, the first window starts at the gap's start, each
+ * window starts where the previous ended (a missing bin — no source events
+ * — joins its neighbour at no cost), and the last ends at the gap's top.
+ * Count bins are usually coarser than the minute-aligned gap, and a window
+ * running past the gap's top would re-emit covered minutes, which the
+ * store doubles. A gap with no bins at all is one window.
+ *
+ * Without `gap` the windows follow the bins exactly, holes included.
  */
 export function planDensityWindows(
   bins: readonly { tSec: number; count: number }[],
   binSeconds: number,
   maxEventsPerWindow: number = SAFE_MAX_EXPORT_EVENTS,
+  gap?: BackfillWindow,
 ): BackfillWindow[] {
+  const inGap = gap
+    ? bins
+      .filter((b) => b.tSec + binSeconds > gap.earliestSec && b.tSec < gap.latestSec)
+      .sort((a, b) => a.tSec - b.tSec)
+    : bins;
   const windows: BackfillWindow[] = [];
   let start: number | null = null;
   let acc = 0;
   let end = 0;
-  for (const bin of bins) {
+  for (const bin of inGap) {
     if (start === null) start = bin.tSec;
     if (acc > 0 && acc + bin.count > maxEventsPerWindow) {
       windows.push({ earliestSec: start, latestSec: end });
@@ -218,7 +246,57 @@ export function planDensityWindows(
     end = bin.tSec + binSeconds;
   }
   if (start !== null) windows.push({ earliestSec: start, latestSec: end });
-  return windows;
+  if (!gap) return windows;
+  if (!(gap.latestSec > gap.earliestSec)) return [];
+
+  const tiled: BackfillWindow[] = [];
+  let cursor = gap.earliestSec;
+  for (const w of windows) {
+    const top = Math.min(w.latestSec, gap.latestSec);
+    if (top <= cursor) continue;
+    tiled.push({ earliestSec: cursor, latestSec: top });
+    cursor = top;
+  }
+  if (cursor < gap.latestSec) {
+    if (tiled.length > 0) tiled[tiled.length - 1] = { earliestSec: tiled[tiled.length - 1].earliestSec, latestSec: gap.latestSec };
+    else tiled.push({ earliestSec: gap.earliestSec, latestSec: gap.latestSec });
+  }
+  return tiled;
+}
+
+/**
+ * Why `windows` does not tile `gap` — contiguous, non-overlapping, in
+ * bounds, every edge finite, covering it from bottom to top — or null when
+ * it does. Order does not matter. {@link runMetricsBackfill} fails an
+ * emitter whose `planWindows` output does not tile: an overlap or a window
+ * past the gap re-emits minutes (the store doubles them), and a hole is
+ * history never filled that the next run's probe cannot see.
+ */
+export function windowTilingError(windows: readonly BackfillWindow[], gap: BackfillWindow): string | null {
+  if (windows.length === 0) return `no windows for gap ${gap.earliestSec}-${gap.latestSec}`;
+  for (const w of windows) {
+    if (!w || !Number.isFinite(w.earliestSec) || !Number.isFinite(w.latestSec)) {
+      return `window has a non-finite edge: ${JSON.stringify(w)}`;
+    }
+    if (!(w.latestSec > w.earliestSec)) return `empty or inverted window ${w.earliestSec}-${w.latestSec}`;
+    if (w.earliestSec < gap.earliestSec || w.latestSec > gap.latestSec) {
+      return `window ${w.earliestSec}-${w.latestSec} is outside gap ${gap.earliestSec}-${gap.latestSec}`;
+    }
+  }
+  const sorted = [...windows].sort((a, b) => a.earliestSec - b.earliestSec);
+  if (sorted[0].earliestSec !== gap.earliestSec) {
+    return `hole ${gap.earliestSec}-${sorted[0].earliestSec} at the bottom of the gap`;
+  }
+  for (let i = 1; i < sorted.length; i += 1) {
+    const prev = sorted[i - 1]; const cur = sorted[i];
+    if (cur.earliestSec < prev.latestSec) {
+      return `windows ${prev.earliestSec}-${prev.latestSec} and ${cur.earliestSec}-${cur.latestSec} overlap`;
+    }
+    if (cur.earliestSec > prev.latestSec) return `hole ${prev.latestSec}-${cur.earliestSec} between windows`;
+  }
+  const top = sorted[sorted.length - 1].latestSec;
+  if (top !== gap.latestSec) return `hole ${top}-${gap.latestSec} at the top of the gap`;
+  return null;
 }
 
 /** Default drop policy: split unless the export dropped every event. A
@@ -296,20 +374,56 @@ export async function runMetricsExport(
 const METRIC_NAME = /^[A-Za-z_:][A-Za-z0-9_:]*$/;
 const LABEL_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+export interface CoverageProbeQueryOptions {
+  /** One result series per value of this label (`count by (label) (m)`). */
+  splitBy?: string;
+  /**
+   * Exact-match label matchers restricting the probe to some series of the
+   * family: `{ quantile: 'p95' }` → `m{quantile="p95"}`. Label names must be
+   * plain PromQL identifiers; values are serialised as escaped string
+   * literals (control characters rejected), so any value is safe.
+   */
+  labels?: Readonly<Record<string, string>>;
+}
+
+/** `m` or `m{a="x",b="y"}` with validated names and escaped values. */
+export function promSelector(metricName: string, labels: Readonly<Record<string, string>> = {}): string {
+  if (!METRIC_NAME.test(metricName)) throw new RangeError(`not a metric name: ${metricName}`);
+  const matchers = Object.entries(labels).map(([name, value]) => {
+    if (!LABEL_NAME.test(name)) throw new RangeError(`not a label name: ${name}`);
+    // eslint-disable-next-line no-control-regex
+    if (typeof value !== 'string' || /[\u0000-\u001f\u007f]/.test(value)) {
+      throw new RangeError(`label ${name} value must be a string without control characters`);
+    }
+    return `${name}=${JSON.stringify(value)}`;
+  });
+  return matchers.length ? `${metricName}{${matchers.join(',')}}` : metricName;
+}
+
 /**
  * PromQL that yields a sample wherever a family has data. Histograms answer
  * only through `histogram_quantile(… by (le))` — a bare `count()` of a
  * histogram returns nothing, which made APM re-backfill a covered family.
  * With `splitBy`, one series per value of that label
- * (`count by (quantile) (m)`), for {@link CoverageSplit}.
+ * (`count by (quantile) (m)`), for {@link CoverageSplit}. With `labels`,
+ * only the matching series (`count(m{quantile="p95"})`). The third
+ * argument is the `splitBy` label or an options object.
  */
-export function coverageProbeQuery(metricName: string, kind?: string, splitBy?: string): string {
-  if (!METRIC_NAME.test(metricName)) throw new RangeError(`not a metric name: ${metricName}`);
+export function coverageProbeQuery(
+  metricName: string,
+  kind?: string,
+  splitByOrOptions?: string | CoverageProbeQueryOptions,
+): string {
+  const o: CoverageProbeQueryOptions = typeof splitByOrOptions === 'string'
+    ? { splitBy: splitByOrOptions }
+    : splitByOrOptions ?? {};
+  const { splitBy } = o;
+  const selector = promSelector(metricName, o.labels);
   if (splitBy !== undefined && !LABEL_NAME.test(splitBy)) throw new RangeError(`not a label name: ${splitBy}`);
   if (kind === 'histogram') {
-    return `histogram_quantile(0.5, sum(rate(${metricName}[5m])) by (le${splitBy ? `, ${splitBy}` : ''}))`;
+    return `histogram_quantile(0.5, sum(rate(${selector}[5m])) by (le${splitBy ? `, ${splitBy}` : ''}))`;
   }
-  return splitBy ? `count by (${splitBy}) (${metricName})` : `count(${metricName})`;
+  return splitBy ? `count by (${splitBy}) (${selector})` : `count(${selector})`;
 }
 
 /** Earliest finite sample time in `series`, or null. Finite, not positive:
@@ -369,7 +483,8 @@ export function createMetricsCoverageProbe<E extends MetricsBackfillEmitter>(
   return async (emitter, earliestMs, latestMs) => {
     const startMs = emitter.kind === 'histogram' ? earliestMs - 300_000 : earliestMs;
     const split = emitter.coverageSplit;
-    const query = opts.query?.(emitter) ?? coverageProbeQuery(emitter.metricName, emitter.kind, split?.label);
+    const query = opts.query?.(emitter)
+      ?? coverageProbeQuery(emitter.metricName, emitter.kind, { splitBy: split?.label, labels: emitter.coverageLabels });
     const series = await queryRange(query, {
       earliest: startMs,
       latest: latestMs,
@@ -478,6 +593,15 @@ export async function runMetricsBackfill<E extends MetricsBackfillEmitter>(
     const planned = deps.planWindows
       ? [...await deps.planWindows(emitter, gap)]
       : planFixedWindows(fromSec, gapToSec, emitter.windowSeconds ?? DEFAULT_BACKFILL_WINDOW_SECONDS);
+    const tilingError = windowTilingError(planned, gap);
+    if (tilingError) {
+      result.status = 'failed';
+      result.error = `planWindows output does not tile the gap: ${tilingError}`;
+      deps.log?.(`backfill ${emitter.id}: ${result.error}`);
+      opts.onProgress?.({ phase: 'plan', emitterId: emitter.id, gap, windowCount: 0 });
+      opts.onProgress?.({ phase: 'emitter-done', result });
+      continue;
+    }
     planned.sort((a, b) => b.latestSec - a.latestSec);
     result.windows = planned.length;
     deps.log?.(`backfill ${emitter.id}: gap ${fromSec}-${gapToSec}, ${planned.length} window(s), newest first`);

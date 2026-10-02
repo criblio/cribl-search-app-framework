@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   ALERT_STATUSES,
   DEFAULT_ALERT_DEBOUNCE,
+  alertArmConditions,
   alertCaseKql,
   alertStateKql,
+  alertStateStages,
   alertTransitionKql,
   nextAlertCounters,
   nextAlertState,
@@ -164,5 +166,81 @@ describe('emitted KQL has the same semantics as nextAlertState', () => {
                  not(is_bad) and prev_status == "resolving" and new_good >= 3, "resolved",
                  "")"
     `);
+  });
+});
+
+describe('composing the state step', () => {
+  const debounces: AlertDebounce[] = [DEFAULT_ALERT_DEBOUNCE, { fireAfter: 3, clearAfter: 1 }];
+  const fields = { prevStatus: 'persisted_status', isBad: 'bad' };
+
+  it.each(debounces)('stages join to alertStateKql byte-for-byte, in both modes (%o)', (d) => {
+    for (const opts of [d, { ...d, fields }]) {
+      const st = alertStateStages(opts);
+      expect([st.defaultPrevStatus, st.counters, st.state].join('\n')).toBe(alertStateKql(opts));
+      expect([st.counters, st.state].join('\n')).toBe(alertStateKql({ ...opts, defaultPrevStatus: false }));
+      expect(alertStateKql({ ...opts, defaultPrevStatus: true })).toBe(alertStateKql(opts));
+    }
+  });
+
+  it('defaultPrevStatus: false drops exactly the defaulting stage', () => {
+    const kql = alertStateKql({ defaultPrevStatus: false });
+    expect(kql).not.toContain('isnotempty');
+    expect(kql.startsWith('| extend new_bad=iff(is_bad, prev_bad + 1, 0),')).toBe(true);
+    expect(alertStateKql().split('\n').slice(1).join('\n')).toBe(kql);
+  });
+
+  it('the arm conditions are the strings the case() embeds, in table order', () => {
+    for (const d of debounces) {
+      const { arms, fire, clear } = alertArmConditions({ ...d, fields });
+      const kase = alertCaseKql({ ...d, fields });
+      expect(kase).toBe(`case(\n${arms.map((a) => `  ${a.condition}, "${a.next}",`).join('\n')}\n  "ok")`);
+      expect(arms.filter((a) => a.transition === 'firing').map((a) => a.condition)).toEqual([fire]);
+      expect(arms.filter((a) => a.transition === 'resolved').map((a) => a.condition)).toEqual([clear]);
+      expect(alertTransitionKql({ ...d, fields })).toBe(`case(\n  ${fire}, "firing",\n  ${clear}, "resolved",\n  "")`);
+      expect(alertStateKql({ ...d, fields })).toContain(`fire_count=iff(${fire}, prev_fire_count + 1, prev_fire_count)`);
+    }
+  });
+
+  it('an arm’s transition and next agree with nextAlertState for every input', () => {
+    const { arms } = alertArmConditions();
+    for (const prevStatus of [...ALERT_STATUSES, 'garbage']) {
+      for (const isBad of [true, false]) {
+        for (let n = 0; n <= 4; n += 1) {
+          const row = { prev_status: prevStatus, is_bad: isBad, new_bad: isBad ? n : 0, new_good: isBad ? 0 : n };
+          const hit = arms.find((a) => evalKqlExpr(a.condition, row) === true);
+          const ts = nextAlertState({ prevStatus, isBad, newBad: row.new_bad, newGood: row.new_good });
+          expect(hit?.next ?? 'ok').toBe(ts.status);
+          expect(hit?.transition ?? '').toBe(ts.transitionedTo);
+        }
+      }
+    }
+  });
+
+  it('without the defaulting stage, an upstream-defaulted replay still matches the TS (TS == KQL)', () => {
+    const kql = alertStateKql({ defaultPrevStatus: false });
+    const evals = [true, true, false, true, false, false, false, true, true];
+    let persisted: AlertStatus | null = null;
+    let row = { prev_bad: 0, prev_good: 0, prev_fire_count: 0 };
+    let ts = { status: 'ok' as AlertStatus, bad: 0, good: 0, fires: 0 };
+    for (const isBad of evals) {
+      // The consumer defaults upstream, as APM's join does.
+      const out = runExtendStages(kql, { ...row, prev_status: persisted ?? 'ok', is_bad: isBad });
+      const { newBad, newGood } = nextAlertCounters(isBad, ts.bad, ts.good);
+      const r = nextAlertState({ prevStatus: ts.status, isBad, newBad, newGood });
+      ts = { status: r.status, bad: newBad, good: newGood, fires: ts.fires + r.fireCountDelta };
+      expect(out).toMatchObject({
+        alert_status: ts.status, consecutive_bad: ts.bad, consecutive_good: ts.good,
+        fire_count: ts.fires, transitioned_to: r.transitionedTo,
+      });
+      persisted = out.alert_status as AlertStatus;
+      row = { prev_bad: out.consecutive_bad as number, prev_good: out.consecutive_good as number, prev_fire_count: out.fire_count as number };
+    }
+    expect(ts.fires).toBe(2);
+  });
+
+  it('without the defaulting stage a null prior status is NOT defaulted (the documented hazard)', () => {
+    const row = { prev_status: null, is_bad: true, prev_bad: 0, prev_good: 0, prev_fire_count: 0 };
+    expect(runExtendStages(alertStateKql({ defaultPrevStatus: false }), row).alert_status).toBe('ok');
+    expect(runExtendStages(alertStateKql(), row).alert_status).toBe('pending');
   });
 });

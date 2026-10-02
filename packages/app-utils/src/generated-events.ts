@@ -68,7 +68,57 @@ export function exportToSearchClause(dataset: string): string {
   return `| export tee=true to search ${kqlStringLiteral(kqlDatasetId(dataset))}`;
 }
 
-export type CanaryFieldValue = string | number | boolean;
+declare const KQL_EXPR_BRAND: unique symbol;
+
+/**
+ * A raw KQL expression for a canary column — `now()`, `tolong(now())`,
+ * `strcat("v-", tostring(now()))`. The ONLY way a canary value reaches the
+ * query unquoted: plain strings are always serialised as literals, so a
+ * value that happens to read `now()` stays the string `"now()"`.
+ *
+ * Trusted code only — never wrap user or workspace input. The text must be
+ * a single expression: non-empty, at most 512 characters, with no newline,
+ * control character, `|` or `;` (each would let it end the `print` and
+ * start another stage).
+ */
+export interface KqlExpr {
+  readonly kql: string;
+  readonly [KQL_EXPR_BRAND]: true;
+}
+
+/** Only values minted by {@link kqlExpr} — a look-alike `{ kql }` object is not one. */
+const KQL_EXPRS = new WeakSet<object>();
+
+function isKqlExpr(value: unknown): value is KqlExpr {
+  return typeof value === 'object' && value !== null && KQL_EXPRS.has(value);
+}
+
+/** Wrap trusted KQL as a canary column expression. See {@link KqlExpr}. */
+export function kqlExpr(text: string): KqlExpr {
+  if (typeof text !== 'string' || text.trim() === '' || text.length > 512) {
+    throw new KqlSafetyError('kqlExpr needs a non-empty expression of at most 512 characters');
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f|;]/.test(text)) {
+    throw new KqlSafetyError(`kqlExpr must be one expression without newlines, "|" or ";": ${text.slice(0, 80)}`);
+  }
+  const expr = Object.freeze({ kql: text.trim() }) as KqlExpr;
+  KQL_EXPRS.add(expr);
+  return expr;
+}
+
+export type CanaryFieldValue = string | number | boolean | KqlExpr;
+
+/** A datatype's extra canary columns. */
+export type CanaryFields = Record<string, CanaryFieldValue>;
+
+/**
+ * Static columns, or a callback that receives the (validated) canary id and
+ * returns them — for per-run values such as an `evaluation_id` or `version`
+ * derived from the id. The callback runs on every `canarySend`, and its
+ * result is validated exactly like static fields.
+ */
+export type CanaryFieldsSpec = CanaryFields | ((canaryId: string) => CanaryFields);
 
 export interface GeneratedEventsConfig<D extends string> {
   /** Every datatype the app writes. Readers and the canary cover exactly these. */
@@ -78,8 +128,11 @@ export interface GeneratedEventsConfig<D extends string> {
   /** `producer` on canary rows, so they are distinguishable from real producers. */
   canaryProducer: string;
   /** Extra columns per datatype on its canary row — make each canary look like
-   * a real event so a reader that filters on those columns still sees it. */
-  canaryFields?: Partial<Record<D, Record<string, CanaryFieldValue>>>;
+   * a real event so a reader that filters on those columns still sees it.
+   * Values are literals (strings, numbers, booleans — always serialised
+   * safely) or {@link kqlExpr} expressions; a callback `(canaryId) => fields`
+   * gives per-run values. */
+  canaryFields?: Partial<Record<D, CanaryFieldsSpec>>;
 }
 
 export interface CanaryVerdict {
@@ -107,11 +160,30 @@ export interface GeneratedEvents<D extends string> {
 const RESERVED = new Set(['datatype', 'schema_version', 'event_id', 'producer', 'is_canary', 'dataset', '_time']);
 
 function canaryValue(value: CanaryFieldValue): string {
+  if (isKqlExpr(value)) return value.kql;
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   if (typeof value === 'number') {
     return Number.isSafeInteger(value) ? `tolong(${kqlInteger(value)})` : `toreal(${String(value)})`;
   }
   return kqlStringLiteral(value);
+}
+
+function validateCanaryFields(fields: CanaryFields): CanaryFields {
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
+    throw new KqlSafetyError('canary fields must be an object of column → value');
+  }
+  for (const [name, value] of Object.entries(fields)) {
+    column(name);
+    if (RESERVED.has(name)) throw new KqlSafetyError(`canary field ${name} is set by the contract`);
+    if (isKqlExpr(value)) continue;
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) throw new KqlSafetyError(`canary field ${name} is not finite`);
+    } else if (typeof value !== 'string' && typeof value !== 'boolean') {
+      // A plain object posing as an expression ({ kql: '…' }) lands here.
+      throw new KqlSafetyError(`canary field ${name} must be a string, number, boolean or kqlExpr()`);
+    }
+  }
+  return fields;
 }
 
 function canaryId(value: string): string {
@@ -131,12 +203,8 @@ export function defineGeneratedEvents<const D extends string>(
   if (new Set(datatypes).size !== datatypes.length) throw new KqlSafetyError('datatypes must be unique');
   const schemaVersion = kqlInteger(config.schemaVersion, { min: 1 });
   const producer = kqlStringLiteral(config.canaryProducer);
-  for (const fields of Object.values(config.canaryFields ?? {}) as Record<string, CanaryFieldValue>[]) {
-    for (const [name, value] of Object.entries(fields)) {
-      column(name);
-      if (RESERVED.has(name)) throw new KqlSafetyError(`canary field ${name} is set by the contract`);
-      if (typeof value === 'number' && !Number.isFinite(value)) throw new KqlSafetyError(`canary field ${name} is not finite`);
-    }
+  for (const spec of Object.values(config.canaryFields ?? {}) as (CanaryFieldsSpec | undefined)[]) {
+    if (spec !== undefined && typeof spec !== 'function') validateCanaryFields(spec);
   }
   const known = new Set<string>(datatypes);
   const eventId = (id: string, dt: string) => kqlStringLiteral(`${id}:${dt}`);
@@ -157,7 +225,9 @@ export function defineGeneratedEvents<const D extends string>(
       const id = canaryId(rawId);
       const dataset = kqlStringLiteral(kqlDatasetId(rawDataset));
       const rows = datatypes.map((dt) => {
-        const extra = Object.entries(config.canaryFields?.[dt] ?? {})
+        const spec = config.canaryFields?.[dt];
+        const fields = typeof spec === 'function' ? validateCanaryFields(spec(id)) : spec ?? {};
+        const extra = Object.entries(fields)
           .map(([name, value]) => `, ${name}=${canaryValue(value)}`)
           .join('');
         return `print datatype=${kqlStringLiteral(dt)}, schema_version=tolong(${schemaVersion}), ` +

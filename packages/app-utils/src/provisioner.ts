@@ -24,7 +24,8 @@
  * The node client uses an explicit Bearer token from OAuth client
  * credentials (see `getBearerToken`).
  */
-import { getCachedBearerToken, type OAuthConfig } from './auth.js';
+import { getCachedBearerToken, type CachedBearerTokenOptions, type OAuthConfig } from './auth.js';
+import { metricsQueryPath, type MetricsTransport } from './metrics.js';
 import {
   ProvisionPlanError,
   validateProvisionPlan,
@@ -777,5 +778,47 @@ export async function createNodeHttpClient(config: OAuthConfig): Promise<HttpCli
     post: (path, body) => request('POST', path, body),
     patch: (path, body) => request('PATCH', path, body),
     del: (path) => request('DELETE', path),
+  };
+}
+
+export interface NodeMetricsTransportOptions extends CachedBearerTokenOptions {
+  /** Injected fetch for the metrics GET (tests). Defaults to the global.
+   * The OAuth exchange always uses the global fetch. */
+  fetch?: typeof fetch;
+}
+
+/**
+ * Node-side `MetricsTransport`: GETs `/api/v1` + {@link metricsQueryPath}
+ * on the configured workspace with a Bearer token from
+ * `getCachedBearerToken`, and returns the raw NDJSON body. The token is
+ * looked up per query, so a long-running script (a metrics backfill) picks
+ * up a refreshed token instead of failing an hour in. A non-2xx response
+ * throws with its status and the start of its body. Pass it as
+ * `transport` to `/metrics` queries or to `createMetricsCoverageProbe`:
+ *
+ * ```ts
+ * earliestCoveredSec: createMetricsCoverageProbe({ transport: createNodeMetricsTransport(oauth) })
+ * ```
+ *
+ * Node only: in the app iframe use the default transport (the fetch proxy
+ * supplies auth); a browser cannot call the workspace with client
+ * credentials.
+ */
+export function createNodeMetricsTransport(
+  oauth: OAuthConfig,
+  opts: NodeMetricsTransportOptions = {},
+): MetricsTransport {
+  const apiBase = `${oauth.baseUrl.replace(/\/$/, '')}/api/v1`;
+  const tokenOptions: CachedBearerTokenOptions = { refreshMarginMs: opts.refreshMarginMs };
+  return async (query, queryOpts) => {
+    const token = await getCachedBearerToken(oauth, tokenOptions);
+    const doFetch = opts.fetch ?? fetch;
+    const resp = await doFetch(`${apiBase}${metricsQueryPath(query, queryOpts)}`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: queryOpts.signal,
+    });
+    const text = await resp.text();
+    if (!resp.ok) throw new Error(`metrics query failed (${resp.status}): ${text.slice(0, 400)}`);
+    return text;
   };
 }

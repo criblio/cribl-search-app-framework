@@ -9,7 +9,9 @@ import {
   readExportStats,
   runMetricsBackfill,
   runMetricsExport,
+  promSelector,
   splitCoverageSec,
+  windowTilingError,
   type BackfillWindow,
   type ExportStats,
   type MetricsBackfillDeps,
@@ -74,6 +76,83 @@ describe('window planning', () => {
       { earliestSec: 600, latestSec: 1200 },
       { earliestSec: 1200, latestSec: 1500 },
     ]);
+  });
+});
+
+describe('density windows clamped to the gap', () => {
+  const gap = { earliestSec: 1_020, latestSec: 2_340 }; // minute-aligned, not 300-aligned
+
+  it('drops bins outside the gap and clamps both ends, so no covered minute is re-emitted', () => {
+    const bins = [0, 300, 600, 900, 1200, 1500, 1800, 2100, 2400, 2700].map((tSec) => ({ tSec, count: 10 }));
+    const w = planDensityWindows(bins, 300, 25, gap);
+    expect(w).toEqual([
+      { earliestSec: 1_020, latestSec: 1_500 },
+      { earliestSec: 1_500, latestSec: 2_100 },
+      { earliestSec: 2_100, latestSec: 2_340 },
+    ]);
+    expect(windowTilingError(w, gap)).toBeNull();
+  });
+
+  it('bridges missing (empty) bins so the windows stay contiguous', () => {
+    const bins = [{ tSec: 1_200, count: 30 }, { tSec: 2_100, count: 30 }];
+    const w = planDensityWindows(bins, 300, 40, gap);
+    expect(w).toEqual([
+      { earliestSec: 1_020, latestSec: 1_500 },
+      { earliestSec: 1_500, latestSec: 2_340 },
+    ]);
+    expect(windowTilingError(w, gap)).toBeNull();
+    // Without the gap the bins are followed exactly, hole included (unchanged).
+    expect(planDensityWindows(bins, 300, 40)).toEqual([
+      { earliestSec: 1_200, latestSec: 1_500 },
+      { earliestSec: 2_100, latestSec: 2_400 },
+    ]);
+  });
+
+  it('a gap with no source events is one window; an empty gap none', () => {
+    expect(planDensityWindows([], 300, 40, gap)).toEqual([gap]);
+    expect(planDensityWindows([{ tSec: 0, count: 5 }], 300, 40, gap)).toEqual([gap]);
+    expect(planDensityWindows([], 300, 40, { earliestSec: 60, latestSec: 60 })).toEqual([]);
+  });
+
+  it('accepts unsorted bins when given a gap', () => {
+    const bins = [{ tSec: 1_800, count: 30 }, { tSec: 1_200, count: 30 }];
+    expect(windowTilingError(planDensityWindows(bins, 300, 40, gap), gap)).toBeNull();
+  });
+});
+
+describe('window tiling validation', () => {
+  const gap = { earliestSec: 0, latestSec: 600 };
+  it('accepts an exact tiling in any order and names every failure mode', () => {
+    expect(windowTilingError([{ earliestSec: 300, latestSec: 600 }, { earliestSec: 0, latestSec: 300 }], gap)).toBeNull();
+    expect(windowTilingError([], gap)).toMatch(/no windows/);
+    expect(windowTilingError([{ earliestSec: 0, latestSec: 660 }], gap)).toMatch(/outside gap/);
+    expect(windowTilingError([{ earliestSec: -60, latestSec: 600 }], gap)).toMatch(/outside gap/);
+    expect(windowTilingError([{ earliestSec: 0, latestSec: 360 }, { earliestSec: 300, latestSec: 600 }], gap)).toMatch(/overlap/);
+    expect(windowTilingError([{ earliestSec: 0, latestSec: 240 }, { earliestSec: 300, latestSec: 600 }], gap)).toMatch(/hole 240-300 between/);
+    expect(windowTilingError([{ earliestSec: 60, latestSec: 600 }], gap)).toMatch(/bottom/);
+    expect(windowTilingError([{ earliestSec: 0, latestSec: 540 }], gap)).toMatch(/top/);
+    expect(windowTilingError([{ earliestSec: 0, latestSec: 0 }, { earliestSec: 0, latestSec: 600 }], gap)).toMatch(/empty/);
+    expect(windowTilingError([{ earliestSec: 0, latestSec: Number.NaN }], gap)).toMatch(/non-finite/);
+  });
+
+  it('fails the emitter clearly, before any export, when planWindows does not tile the gap', async () => {
+    const s = fakeStore({ app_requests_total: null, app_latency_ms: null });
+    const logs: string[] = [];
+    const seen: MetricsBackfillProgress[] = [];
+    const planWindows = vi.fn((e: MetricsBackfillEmitter, g: BackfillWindow) =>
+      e.id === 'latency'
+        ? [{ earliestSec: g.earliestSec, latestSec: g.latestSec + 300 }] // runs past the covered boundary
+        : planFixedWindows(g.earliestSec, g.latestSec));
+    const r = await runMetricsBackfill([latency, requests], { ...s.deps, planWindows, log: (m) => logs.push(m) }, {
+      horizonSec: H, nowSec: NOW, onProgress: (p) => seen.push(p),
+    });
+    expect(r.emitters[0]).toMatchObject({ status: 'failed', exportsRun: 0, windows: 0 });
+    expect(r.emitters[0].error).toMatch(/planWindows output does not tile the gap: window .* is outside gap/);
+    expect(logs.some((l) => l.includes('does not tile'))).toBe(true);
+    expect(seen.filter((p) => p.phase === 'emitter-done')).toHaveLength(2);
+    // The next emitter still runs, and nothing was exported for the bad one.
+    expect(r.emitters[1].status).toBe('filled');
+    expect(s.exports.every((e) => e.query === 'Q_REQ')).toBe(true);
   });
 });
 
@@ -215,7 +294,7 @@ describe('runMetricsBackfill', () => {
   it('uses an emitter window size or an injected planner', async () => {
     const s = fakeStore({ app_requests_total: null, app_latency_ms: null });
     const planWindows = vi.fn((_e: MetricsBackfillEmitter, gap: BackfillWindow) =>
-      planDensityWindows([{ tSec: gap.earliestSec, count: 1 }, { tSec: gap.latestSec - 300, count: 1 }], 300, 1));
+      planDensityWindows([{ tSec: gap.earliestSec, count: 1 }, { tSec: gap.latestSec - 300, count: 1 }], 300, 1, gap));
     await runMetricsBackfill([{ ...requests, windowSeconds: 12 * H }], s.deps, { horizonSec: 24 * H, nowSec: NOW });
     expect(s.exports).toHaveLength(2);
     s.exports.length = 0;
@@ -265,6 +344,35 @@ describe('coverage probe', () => {
     expect(calls[0].query).toContain('histogram_quantile');
     await probe(requests, 1_000_000, 2_000_000);
     expect(calls[1]).toMatchObject({ earliest: 1_000_000, query: 'count(app_requests_total)' });
+  });
+});
+
+describe('coverage probe label selector', () => {
+  it('restricts the probe to exact label values, escaped', () => {
+    expect(coverageProbeQuery('m', 'gauge', { labels: { quantile: 'p95' } })).toBe('count(m{quantile="p95"})');
+    expect(coverageProbeQuery('m', 'gauge', { splitBy: 'route', labels: { quantile: 'p95', env: 'a"b\\c' } }))
+      .toBe('count by (route) (m{quantile="p95",env="a\\"b\\\\c"})');
+    expect(coverageProbeQuery('m_ms', 'histogram', { labels: { svc: 'x' } }))
+      .toBe('histogram_quantile(0.5, sum(rate(m_ms{svc="x"}[5m])) by (le))');
+    expect(coverageProbeQuery('m', undefined, {})).toBe('count(m)');
+    expect(promSelector('m')).toBe('m');
+  });
+
+  it('rejects unsafe label names and control characters', () => {
+    expect(() => coverageProbeQuery('m', undefined, { labels: { 'q"}) or vector(1': 'x' } })).toThrow(RangeError);
+    expect(() => coverageProbeQuery('m', undefined, { labels: { q: 'a\nb' } })).toThrow(RangeError);
+    expect(() => promSelector('m{', {})).toThrow(RangeError);
+  });
+
+  it('the default probe applies an emitter coverageLabels', async () => {
+    const calls: string[] = [];
+    const transport = vi.fn(async (query: string) => {
+      calls.push(query);
+      return '{"isFinished":true,"job":{"status":"completed"}}\n{"_kind":"sample","_time":600,"_value":1}';
+    });
+    const probe = createMetricsCoverageProbe({ transport });
+    await expect(probe({ ...requests, coverageLabels: { quantile: 'p95' } }, 0, 1_000_000)).resolves.toBe(600);
+    expect(calls).toEqual(['count(app_requests_total{quantile="p95"})']);
   });
 });
 
