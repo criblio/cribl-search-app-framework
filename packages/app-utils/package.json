@@ -51,7 +51,10 @@
     "./provision-guard": "./dist/provision-guard.js",
     "./provision-canary": "./dist/provision-canary.js",
     "./notifications": "./dist/notifications.js",
-    "./vt-results": "./dist/vt-results.js"
+    "./vt-results": "./dist/vt-results.js",
+    "./metrics-backfill": "./dist/metrics-backfill.js",
+    "./generated-events": "./dist/generated-events.js",
+    "./alert-state": "./dist/alert-state.js"
   },
   "peerDependencies": {
     "d3-array": "^3.2.0",

@@ -70,10 +70,18 @@ by ID — never ask users to paste webhook URLs into your app.
   (`<real> | union (print …)`) skips the export when `<real>` is empty
 - `mv-expand` upstream of `export to lookup` fails the write; split into
   a compute search and an export search
-- `| send group="search"` — send events to the Local Search HTTP
-  input. Include `dataset="<name>"` in the event to route to the
-  right lakehouse dataset. Do NOT use `group="default_search"`
-  (crashes).
+- `| export tee=true to search "<dataset>"` — write result rows back
+  to a dataset as durable events (`tee=true` also passes them to
+  `$vt_results`). Use `exportToSearchClause` from
+  `@criblio/app-utils/generated-events`. Do NOT use
+  `| send group="search"`: it silently stopped persisting (the job
+  completes, nothing lands), and rows it did write stored `datatype`
+  as `data_datatype` — read with `STORED_DATATYPE_EXPR`, which
+  coalesces both.
+- `| export to metrics …` — the job reports `completed` even when it
+  drops every event. Read `eventsOut`/`eventsDropped`/`dropReasons`
+  from its result row (`readExportStats` in
+  `@criblio/app-utils/metrics-backfill`).
 - `$vt_results` — read scheduled search output. Filter by `jobName`.
 - `ago(1h)` — works for time splitting within queries
 
@@ -148,18 +156,23 @@ time. Seed lookups with an init query in the provisioner before
 creating searches that reference them.
 
 ### Alert state machine
-Three-search pattern for server-side alerting without a browser:
-1. Previous-window summary → export to lookup
-2. Evaluator → reads current from $vt_results, joins prev from
-   lookup, applies state machine, outputs to $vt_results for the UI
-3. State export → exports state to lookup for the next cycle
+One evaluator search, no mutable state lookup:
+1. Previous-window summary → export to lookup (the baseline)
+2. Evaluator → computes `is_bad` per alert, joins the latest persisted
+   evaluation event for `prev_status`/`prev_bad`/`prev_good`/
+   `prev_fire_count`, applies the state machine, and writes the result
+   rows with `| export tee=true to search "<dataset>"` — the durable
+   history and the UI's `$vt_results` in one write.
 
-Optional: `| send group="search"` for writing history events back
-to the dataset as queryable records.
-
-State machine lifecycle: ok → pending → firing → resolving → ok.
-Use `fireAfter` (consecutive bad evaluations before firing) and
-`clearAfter` (consecutive good before clearing) for debounce.
+Lifecycle: ok → pending → firing → resolving → ok, plus pending → ok
+(a flap that never fired) and resolving → firing (a relapse, not a new
+fire). Generate the KQL with `alertStateKql({ fireAfter, clearAfter })`
+from `@criblio/app-utils/alert-state` and reason about it in TS with
+`nextAlertState` — the two share one arm table, so they cannot drift.
+An alert arm that only emits rows while bad never sees a good
+evaluation and so never resolves: emit a row for every evaluated key.
+Prove the event write path after provisioning with
+`runGeneratedEventCanary`.
 
 ### Cadence
 Make scheduled search cadence configurable via a Settings page
