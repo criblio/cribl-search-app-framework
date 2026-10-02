@@ -292,6 +292,11 @@ Every failure these exist for reported success in every API layer.
   `config.guard: { disableRules: [...] }` skips one rule; `guard: false`
   turns it off. `config.validate(plan, ctx)` ADDS app rules — it never
   replaces the built-in ones. Also run it in CI against the real plan.
+  `ProvisionProblem.rule` is `ProvisionProblemRule` =
+  `ProvisionRule | (string & {})`, so an app rule carries its own name
+  through `ProvisionPlanError` and `InvalidPlanView` (it used to have to
+  borrow a built-in, which mislabelled it and let `disableRules` for that
+  built-in drop it). `disableRules` stays typed to the built-ins.
 - `runProvisionCanary(http, { sentinelSearchId, lookupProbe?: { name, kql },
   extraProbes?, firstInstall?, sentinelWindow?, timeoutMs? })` →
   `{ ok, probes: { name, ok, tolerated, rowCount, message }[] }`. The
@@ -333,9 +338,15 @@ Every failure these exist for reported success in every API layer.
 - `getCurrentDataset / setCurrentDataset / subscribeDataset` —
   module-level pub/sub for the active Cribl dataset
 - `useDataset()` — React hook backed by `useSyncExternalStore`
-- `<DatasetProvider defaultDataset>` — puts `defaultDataset` in the
-  store before children render (only if the store is empty), then loads
-  the saved dataset and pushes it in; nothing saved ⇒ the app default
+- `<DatasetProvider defaultDataset onError?>` — puts `defaultDataset` in
+  the store before children render (only if the store is empty), then
+  loads the saved dataset and pushes it in; nothing saved ⇒ the app default
+- A failed KV read keeps the app default but is not silent: it lands in
+  `useDatasetLoadError()` / `getDatasetLoadError()` /
+  `subscribeDatasetLoadError` (`/dataset`), goes to `onError(err: Error)`,
+  and is `console.warn`ed when there is no `onError`. The next good load
+  clears it. `onError` is read through a ref, so an inline arrow does not
+  re-run the load.
 - Pair with `<Outlet key={dataset} />` in your shell so route
   subtrees fully remount on dataset change.
 
@@ -383,6 +394,15 @@ Every failure these exist for reported success in every API layer.
   `createMetricsCoverageProbe()` is the matching `earliestCoveredSec`
   (histograms probe via `histogram_quantile`; a bare `count()` of one is
   empty).
+- `emitter.coverageSplit: { label, values }` — probe per label value for
+  families whose series share one name (percentile gauges with a
+  `quantile` label). `count(metric)` is covered wherever ANY series
+  exists, so a covered p95 hid an empty p99. With a split the probe runs
+  `count by (label) (metric)` and coverage starts at the LATEST of each
+  value's earliest sample (`splitCoverageSec`) — the gap is wherever any
+  required series is missing; a listed value with no sample is
+  uncovered. The emitter re-writes the older series over that gap, so use
+  it for gauges, not counters.
 
 ```ts
 const result = await runMetricsBackfill(emitters, {
@@ -595,6 +615,13 @@ why only the packer was superseded.
   host globals and Bearer fetch wrapper are missing; these put them back.
   `docs/testing.md` has the recommended `playwright.config.ts`,
   `auth.setup.ts` and `vitest.config.ts`.
+- **Every subpath ships hand-written `.d.ts`** beside its `.mjs`, wired as
+  the `types` condition in `exports` (`types` first). `./proxies` shipped
+  with none until 0.4.1, so a strict TS app got TS7016 importing
+  `parseProxiesYaml`. `npm run typecheck` compiles a strict NodeNext
+  consumer (`test-types/consumer.ts`) through the exports map by package
+  name, and `test/declarations.test.mjs` fails when a runtime export or a
+  new subpath has no declaration — update the `.d.ts` with the `.mjs`.
 
 The tooling package owns mechanisms. Consumer package scripts and CI
 provide app policy such as `--require-empty-proxies` /

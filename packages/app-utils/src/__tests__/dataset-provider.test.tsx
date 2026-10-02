@@ -16,21 +16,30 @@
  * window the first defect lived in: whatever a child sees here is what it
  * saw on its first client render too.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { DatasetProvider } from '../DatasetProvider.js';
-import { loadSavedDataset } from '../dataset-settings.js';
-import { getCurrentDataset, setCurrentDataset } from '../dataset.js';
+import { loadSavedDataset, syncSavedDataset } from '../dataset-settings.js';
+import {
+  getCurrentDataset,
+  getDatasetLoadError,
+  setCurrentDataset,
+  setDatasetLoadError,
+  useDatasetLoadError,
+} from '../dataset.js';
 
 const API = 'https://api.example/api/v1';
 const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
   setCurrentDataset('');
+  setDatasetLoadError(null);
   (globalThis as { window?: unknown }).window = { CRIBL_API_URL: API };
 });
 afterEach(() => {
   setCurrentDataset('');
+  setDatasetLoadError(null);
+  vi.restoreAllMocks();
   globalThis.fetch = originalFetch;
   delete (globalThis as { window?: unknown }).window;
 });
@@ -111,5 +120,71 @@ describe('loadSavedDataset (the provider\'s KV read)', () => {
   it('a KV failure rejects rather than inventing a value', async () => {
     serveSettings('<html>not found</html>', 404);
     await expect(loadSavedDataset('web_events')).rejects.toThrow(/returned HTML/);
+  });
+});
+
+describe('a KV failure is surfaced, and the fallback kept (syncSavedDataset, the provider effect)', () => {
+  const brokenKv = () => serveSettings('<html>not found</html>', 404);
+
+  it('keeps the app default, records the error, and calls onError', async () => {
+    setCurrentDataset('web_events');
+    brokenKv();
+    const onError = vi.fn();
+    await syncSavedDataset('web_events', { onError });
+    expect(getCurrentDataset()).toBe('web_events');
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0]).toBeInstanceOf(Error);
+    expect(getDatasetLoadError()?.message).toMatch(/returned HTML/);
+  });
+
+  it('warns instead of staying silent when no onError is given', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    brokenKv();
+    await syncSavedDataset('web_events');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(getDatasetLoadError()).toBeInstanceOf(Error);
+  });
+
+  it('a throwing onError does not reject', async () => {
+    brokenKv();
+    await expect(syncSavedDataset('web_events', { onError: () => { throw new Error('reporter'); } })).resolves.toBeUndefined();
+  });
+
+  it('a later successful load applies the saved value and clears the error', async () => {
+    setDatasetLoadError(new Error('earlier'));
+    serveSettings(JSON.stringify({ dataset: 'my_otel' }));
+    const onError = vi.fn();
+    await syncSavedDataset('web_events', { onError });
+    expect(getCurrentDataset()).toBe('my_otel');
+    expect(getDatasetLoadError()).toBeNull();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('a cancelled (unmounted) load changes nothing', async () => {
+    brokenKv();
+    const onError = vi.fn();
+    await syncSavedDataset('web_events', { onError, isCancelled: () => true });
+    expect(getDatasetLoadError()).toBeNull();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('useDatasetLoadError reads the recorded error', () => {
+    function Probe() {
+      const err = useDatasetLoadError();
+      return <span>{err ? `error:${err.message}` : 'ok'}</span>;
+    }
+    expect(renderToString(<Probe />)).toContain('ok');
+    setDatasetLoadError(new Error('kv down'));
+    expect(renderToString(<Probe />)).toContain('error:kv down');
+  });
+
+  it('DatasetProvider accepts onError without changing first render', () => {
+    const html = renderToString(
+      <DatasetProvider defaultDataset="web_events" onError={() => undefined}>
+        <span>child</span>
+      </DatasetProvider>,
+    );
+    expect(html).toContain('child');
+    expect(getCurrentDataset()).toBe('web_events');
   });
 });

@@ -1,16 +1,37 @@
 {
   "name": "@criblio/app-tooling",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "description": "Deterministic package, deployment, release, and security tooling for Cribl Apps",
   "exports": {
-    ".": "./src/index.mjs",
-    "./pack": "./src/pack.mjs",
-    "./inspect": "./src/inspect.mjs",
-    "./proxies": "./src/proxies.mjs",
-    "./deploy": "./src/deploy.mjs",
-    "./release-evidence": "./src/release-evidence.mjs",
-    "./security": "./src/security.mjs",
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.mjs"
+    },
+    "./pack": {
+      "types": "./src/pack.d.ts",
+      "default": "./src/pack.mjs"
+    },
+    "./inspect": {
+      "types": "./src/inspect.d.ts",
+      "default": "./src/inspect.mjs"
+    },
+    "./proxies": {
+      "types": "./src/proxies.d.ts",
+      "default": "./src/proxies.mjs"
+    },
+    "./deploy": {
+      "types": "./src/deploy.d.ts",
+      "default": "./src/deploy.mjs"
+    },
+    "./release-evidence": {
+      "types": "./src/release-evidence.d.ts",
+      "default": "./src/release-evidence.mjs"
+    },
+    "./security": {
+      "types": "./src/security.d.ts",
+      "default": "./src/security.mjs"
+    },
     "./playwright": {
       "types": "./src/playwright.d.ts",
       "default": "./src/playwright.mjs"
@@ -25,6 +46,7 @@
   },
   "scripts": {
     "test": "node --test",
+    "typecheck": "tsc -p test-types/tsconfig.json",
     "audit": "npm audit --audit-level=low"
   },
   "engines": {
@@ -37,6 +59,10 @@
     "@playwright/test": {
       "optional": true
     }
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "typescript": "^6.0.3"
   },
   "license": "Apache-2.0",
   "publishConfig": {

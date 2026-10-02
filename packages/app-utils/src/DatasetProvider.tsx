@@ -20,22 +20,36 @@
  * no `defaultDataset` prop the framework default still applies, as before.
  * The subscribe-notify pattern then triggers re-fetches in mounted pages.
  *
+ * A failed KV read keeps that fallback but is no longer silent: it is
+ * recorded for `useDatasetLoadError()` (from `/dataset`), passed to the
+ * optional `onError` prop, and logged with `console.warn` when there is no
+ * `onError`. The next successful load clears it.
+ *
  * Most apps will pair this with `<Outlet key={dataset} />` in their
  * shell so route subtrees fully remount when the dataset changes —
  * see ../README.md for the pattern.
  */
 
-import { useEffect, type ReactNode } from 'react';
-import { loadSavedDataset } from './dataset-settings.js';
+import { useEffect, useRef, type ReactNode } from 'react';
+import { DATASET_LOAD_WARNING, syncSavedDataset } from './dataset-settings.js';
 import { getCurrentDataset, setCurrentDataset } from './dataset.js';
 
-interface Props {
+export interface DatasetProviderProps {
   /** Fallback dataset name to apply if no settings are saved. */
   defaultDataset?: string;
+  /** Called when the saved dataset cannot be loaded (KV unreachable or
+   * malformed). The app default stays in use either way. Not a dependency
+   * of the load: an inline arrow does not re-trigger it. */
+  onError?: (err: Error) => void;
   children: ReactNode;
 }
 
-export function DatasetProvider({ defaultDataset, children }: Props) {
+export function DatasetProvider({ defaultDataset, onError, children }: DatasetProviderProps) {
+  const onErrorRef = useRef(onError);
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
+
   // Render-time on purpose (see above): an effect is too late. Guarded on
   // an empty store, so it is idempotent across re-renders and StrictMode's
   // double render, and never clobbers a value someone already chose.
@@ -45,13 +59,15 @@ export function DatasetProvider({ defaultDataset, children }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    loadSavedDataset(defaultDataset)
-      .then((ds) => {
-        if (!cancelled && ds) setCurrentDataset(ds);
-      })
-      .catch(() => {
-        /* KV unreachable — leave the default (or whatever's set) in place. */
-      });
+    void syncSavedDataset(defaultDataset, {
+      isCancelled: () => cancelled,
+      // Read through the ref at failure time, so the latest prop is used.
+      onError: (err) => {
+        const report = onErrorRef.current;
+        if (report) report(err);
+        else console.warn(DATASET_LOAD_WARNING, err);
+      },
+    });
     return () => {
       cancelled = true;
     };
