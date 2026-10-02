@@ -6,3 +6,4 @@ package-build/
 playwright/.auth/
 test-results/
 backend-build/
+playwright-report/

@@ -9,9 +9,13 @@ inside the Cribl Search sandboxed iframe).
 - `packages/app-utils/` — shared TypeScript utilities + components
   (search client, OAuth, settings, provisioner, cadence, dataset
   store, provisioning UI, CSS tokens)
-- `skeleton/` — clone-ready app template with sidebar, settings
-  page, deploy scripts, Cribl MCP plumbing, `AGENTS.md`, and
-  starter `CLAUDE.md`
+- `skeleton/` — clone-ready app template built to the GoatTown App
+  Builder blueprint: router + Capra bridge, `/configuration` page
+  (settings, dataset, cadence, provisioning), `src/settings.ts`,
+  `src/provisioning/plan.ts`, Vitest + Playwright configs, deploy
+  scripts, Cribl MCP plumbing, `AGENTS.md`, and starter `CLAUDE.md`.
+  GoatTown's App Builder skills assume these files exist; rename or
+  move one and the skills must change with it
 - `docs/skill.md` — Cribl App Platform developer skill (platform
   rules, KQL caveats, sandbox constraints, patterns)
 
