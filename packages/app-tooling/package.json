@@ -1,6 +1,6 @@
 {
   "name": "@criblio/app-tooling",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "Deterministic package, deployment, release, and security tooling for Cribl Apps",
   "exports": {
