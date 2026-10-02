@@ -47,7 +47,11 @@
     "./time": "./dist/time.js",
     "./url-state": "./dist/url-state.js",
     "./page-load": "./dist/page-load.js",
-    "./partial-failure-banner": "./dist/PartialFailureBanner.js"
+    "./partial-failure-banner": "./dist/PartialFailureBanner.js",
+    "./provision-guard": "./dist/provision-guard.js",
+    "./provision-canary": "./dist/provision-canary.js",
+    "./notifications": "./dist/notifications.js",
+    "./vt-results": "./dist/vt-results.js"
   },
   "peerDependencies": {
     "d3-array": "^3.2.0",

@@ -9,13 +9,17 @@
  *
  * Customize the help copy via the optional `helpText` and
  * `dangerHelpText` props.
+ *
+ * Apply goes through `applyProvisioningActions` — the same path as
+ * `reconcile()` — so the plan guard, lookup seeding and notification
+ * bindings run here exactly as they do from a CLI. A plan that fails the
+ * guard is shown as a problem list with no Apply button.
  */
 import { useState } from 'react';
 import {
   createBrowserHttpClient,
   planOnly,
-  applyProvisioningPlan,
-  seedLookups,
+  applyProvisioningActions,
   unprovisionAll,
   type ProvisionerConfig,
   type PlanAction,
@@ -23,7 +27,14 @@ import {
   type SavedSearchRow,
   type ProvisionedSearch,
   type HttpClient,
+  type NotificationResult,
 } from './provisioner.js';
+import { ProvisionPlanError, type ProvisionProblem } from './provision-guard.js';
+import {
+  runProvisionCanary,
+  type ProvisionCanaryOptions,
+  type ProvisionCanaryReport,
+} from './provision-canary.js';
 import s from './ProvisioningPanel.module.css';
 
 /** One app-specific provisioning step run after the saved-search
@@ -46,6 +57,8 @@ type PanelState =
     }
   | { kind: 'applying'; actions: PlanAction[] }
   | { kind: 'results'; results: ActionResult[]; extra?: ProvisioningExtraStep[] }
+  | { kind: 'invalid'; problems: ProvisionProblem[] }
+  | { kind: 'checking' }
   | { kind: 'error'; error: string };
 
 export interface ProvisioningPanelProps {
@@ -65,6 +78,31 @@ export interface ProvisioningPanelProps {
    * caught and surfaced as a failed step, never failing the reconcile.
    */
   afterReconcile?: (http: HttpClient) => Promise<ProvisioningExtraStep[]>;
+  /**
+   * Optional post-reconcile canary (`runProvisionCanary`), run after
+   * Apply and `afterReconcile`, and on demand from a "Run health check"
+   * button. Each probe is reported as a result row. `firstInstall`
+   * defaults to "this Apply created the sentinel search" — a search
+   * created seconds ago cannot have results yet.
+   */
+  canary?: Omit<ProvisionCanaryOptions, 'firstInstall'> & { firstInstall?: boolean };
+}
+
+/** Result rows for a canary report. */
+export function canarySteps(report: ProvisionCanaryReport): ProvisioningExtraStep[] {
+  return report.probes.map((p) => ({
+    label: `Health check: ${p.name}${p.tolerated ? ' (tolerated)' : ''}`,
+    ok: p.ok,
+    detail: p.message,
+  }));
+}
+
+function notificationSteps(results: NotificationResult[]): ProvisioningExtraStep[] {
+  return results.map((n) => ({
+    label: `Notification ${n.step}: ${n.searchId}${n.ok && n.detail ? ` (${n.detail})` : ''}`,
+    ok: n.ok,
+    detail: n.error,
+  }));
 }
 
 function countByKind(actions: PlanAction[]): Record<PlanAction['kind'], number> {
@@ -113,6 +151,7 @@ export default function ProvisioningPanel({
   helpText,
   dangerHelpText,
   afterReconcile,
+  canary,
 }: ProvisioningPanelProps) {
   const [state, setState] = useState<PanelState>({ kind: 'idle' });
   const [confirmUnprovision, setConfirmUnprovision] = useState(false);
@@ -124,8 +163,36 @@ export default function ProvisioningPanel({
       const { plan, current, actions } = await planOnly(http, config);
       setState({ kind: 'preview', plan, current, actions });
     } catch (err) {
-      setState({ kind: 'error', error: err instanceof Error ? err.message : String(err) });
+      setState(failureState(err));
     }
+  }
+
+  async function runCanary(
+    http: HttpClient,
+    firstInstall: boolean,
+  ): Promise<ProvisioningExtraStep[]> {
+    if (!canary) return [];
+    try {
+      const report = await runProvisionCanary(http, {
+        ...canary,
+        firstInstall: canary.firstInstall ?? firstInstall,
+      });
+      return canarySteps(report);
+    } catch (err) {
+      return [
+        {
+          label: 'Health check',
+          ok: false,
+          detail: err instanceof Error ? err.message : String(err),
+        },
+      ];
+    }
+  }
+
+  async function handleHealthCheck() {
+    setState({ kind: 'checking' });
+    const extra = await runCanary(createBrowserHttpClient(), false);
+    setState({ kind: 'results', results: [], extra });
   }
 
   async function handleApply() {
@@ -134,36 +201,36 @@ export default function ProvisioningPanel({
     setState({ kind: 'applying', actions });
     try {
       const http = createBrowserHttpClient();
-      // Cribl validates lookup names when a search is created, so any
-      // lookup the plan's queries reference must exist first. `reconcile()`
-      // seeds them; this panel doesn't use `reconcile()`, so it has to seed
-      // here or every search doing `| lookup <name>` fails to create with
-      // "Unknown lookup table name". Preview stays read-only — seeding is
-      // a write, so it belongs on the apply path.
-      if (config.seedLookups?.length) {
-        await seedLookups(http, config.seedLookups);
-      }
-      const results = await applyProvisioningPlan(http, actions);
+      // The same apply path as reconcile(): re-validates (so this button
+      // can never write a plan the guard refuses), seeds lookups — every
+      // `| lookup <name>` search fails to create without them — then
+      // unbinds deleted searches, writes, and binds notifications.
+      // Preview stays read-only; all of that is a write.
+      const { results, notifications } = await applyProvisioningActions(http, config, actions);
+      const extra: ProvisioningExtraStep[] = notificationSteps(notifications);
       // App-specific post-reconcile steps (e.g. webhook target + binding).
       // Runs after the searches so anything they depend on exists; a
       // throw becomes a failed step rather than failing the whole apply.
-      let extra: ProvisioningExtraStep[] | undefined;
       if (afterReconcile) {
         try {
-          extra = await afterReconcile(http);
+          extra.push(...(await afterReconcile(http)));
         } catch (err) {
-          extra = [
-            {
-              label: 'Post-reconcile steps',
-              ok: false,
-              detail: err instanceof Error ? err.message : String(err),
-            },
-          ];
+          extra.push({
+            label: 'Post-reconcile steps',
+            ok: false,
+            detail: err instanceof Error ? err.message : String(err),
+          });
         }
       }
-      setState({ kind: 'results', results, extra });
+      if (canary) {
+        const sentinelCreated = actions.some(
+          (a) => a.kind === 'create' && a.want.id === canary.sentinelSearchId,
+        );
+        extra.push(...(await runCanary(http, sentinelCreated)));
+      }
+      setState({ kind: 'results', results, extra: extra.length ? extra : undefined });
     } catch (err) {
-      setState({ kind: 'error', error: err instanceof Error ? err.message : String(err) });
+      setState(failureState(err));
     }
   }
 
@@ -179,7 +246,7 @@ export default function ProvisioningPanel({
       const results = await unprovisionAll(http, config.prefix);
       setState({ kind: 'results', results });
     } catch (err) {
-      setState({ kind: 'error', error: err instanceof Error ? err.message : String(err) });
+      setState(failureState(err));
     }
   }
 
@@ -193,10 +260,23 @@ export default function ProvisioningPanel({
           <button type="button" className={s.primaryBtn} onClick={handlePreview}>
             Preview plan
           </button>
+          {canary && (
+            <button type="button" className={s.secondaryBtn} onClick={handleHealthCheck}>
+              Run health check
+            </button>
+          )}
         </div>
       )}
 
       {state.kind === 'loading' && <div className={s.statusLine}>Loading plan…</div>}
+
+      {state.kind === 'checking' && (
+        <div className={s.statusLine}>Checking the scheduled searches' output…</div>
+      )}
+
+      {state.kind === 'invalid' && (
+        <InvalidPlanView problems={state.problems} onDismiss={() => setState({ kind: 'idle' })} />
+      )}
 
       {state.kind === 'error' && (
         <>
@@ -258,6 +338,43 @@ export default function ProvisioningPanel({
             Cancel
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+function failureState(err: unknown): PanelState {
+  if (err instanceof ProvisionPlanError) return { kind: 'invalid', problems: err.problems };
+  return { kind: 'error', error: err instanceof Error ? err.message : String(err) };
+}
+
+/** A plan the guard refused. Deliberately no Apply button. */
+export function InvalidPlanView({
+  problems,
+  onDismiss,
+}: {
+  problems: ProvisionProblem[];
+  onDismiss: () => void;
+}) {
+  return (
+    <div>
+      <div className={s.errorBox}>
+        <strong>Plan refused:</strong> {problems.length} problem(s) must be fixed in the
+        app's provisioning plan before it can be applied. Nothing was written.
+      </div>
+      <ul className={s.actionList}>
+        {problems.map((p, i) => (
+          <li key={`${p.searchId}:${p.rule}:${i}`} className={s.actionRow}>
+            <span className={`${s.actionKind} ${s.actionKind_delete}`}>{p.rule}</span>
+            <span className={s.actionId}>{p.searchId}</span>
+            <span className={s.errText}>{p.message}</span>
+          </li>
+        ))}
+      </ul>
+      <div className={s.actions}>
+        <button type="button" className={s.secondaryBtn} onClick={onDismiss}>
+          Dismiss
+        </button>
       </div>
     </div>
   );

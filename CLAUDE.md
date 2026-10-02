@@ -261,6 +261,53 @@ a confident answer about an image the model never saw.
   lower-level building blocks
 - `createBrowserHttpClient() / createNodeHttpClient(config)` —
   HTTP clients with the right auth headers for either environment
+- `applyProvisioningActions(http, config, actions)` — the ONE apply
+  path (`reconcile` and `<ProvisioningPanel>` both use it): validate,
+  seed lookups, unbind deleted searches, write, bind notifications.
+  Returns `{ results, notifications }`
+- `ProvisionerConfig.guard` / `.validate` / `.notifications` — see below
+
+**Background searches stay true** (`/provision-guard`,
+`/provision-canary`, `/notifications`, `/vt-results`)
+
+Every failure these exist for reported success in every API layer.
+
+- `validateProvisionPlan(searches, { prefix?, seedLookups?, disableRules? })`
+  → `{ ok, problems: { searchId, rule, message }[] }`. Rules: missing or
+  empty `dataset=`; `(?i)` or `mv-expand` upstream of `export … to lookup`;
+  an overwrite export (no `mode=` counts) not starting with a `print`
+  sentinel row; empty lookup name; names outside `^[a-zA-Z0-9 _-]+$`
+  (Cribl 400); duplicate ids; ids outside the prefix. `//` comment lines
+  are ignored. **Runs by default** inside `reconcile`, `planOnly`,
+  `applyProvisioningActions` and the low-level `applyProvisioningPlan`;
+  a failing plan throws `ProvisionPlanError` (`.problems`) before any
+  write, and the panel lists the problems with no Apply button.
+  `config.guard: { disableRules: [...] }` skips one rule; `guard: false`
+  turns it off. `config.validate(plan, ctx)` ADDS app rules — it never
+  replaces the built-in ones. Also run it in CI against the real plan.
+- `runProvisionCanary(http, { sentinelSearchId, lookupProbe?: { name, kql },
+  extraProbes?, firstInstall?, sentinelWindow?, timeoutMs? })` →
+  `{ ok, probes: { name, ok, tolerated, rowCount, message }[] }`. The
+  sentinel must have `$vt_results` rows (default `-2h`); `lookupProbe.kql`
+  returns one row of `total`/`joined` over sampled live keys. First install
+  tolerates empties (`tolerated: true`), never query errors. Pass the same
+  options as `<ProvisioningPanel canary={…}>` to run it after Apply (first
+  install inferred from "this Apply created the sentinel") and from a
+  "Run health check" button.
+- `ensureNotificationTarget(http, { id, type, … })`,
+  `ensureSavedSearchNotification(http, { searchId, targetId, conf? })`,
+  `removeSavedSearchNotification`, `removeNotificationsForSearch` —
+  bindings live at `/m/<group>/notifications`; **inline
+  `schedule.notifications` is dropped by the server**. Or declare
+  `config.notifications: [{ searchId, targetId, conf }]` and the apply
+  path binds after writing the search and unbinds before deleting it.
+- `readVtResults(jobNames, { earliest?, latest?, limit?, signal?,
+  latestRunOnly?, runQuery? })` → `Map<jobName, rows[]>` from ONE
+  `dataset="$vt_results" | where jobName in (…)` job (the `jobName=[…]`
+  form does not parse). Keeps each job's newest run (`latestRunRows`);
+  a job with no rows is an ABSENT key — fall back to the live query.
+  Default limit 10 000 (`runQuery`'s 200 truncates a batch).
+  `runStartedMs(jobId)` reads the run's epoch ms.
 
 **Cadence** (`@cribl/app-utils/cadence`, `/cadence-picker`)
 

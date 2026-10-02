@@ -53,7 +53,54 @@ export {
   type PlanAction,
   type ActionResult,
   type HttpClient,
+  applyProvisioningActions,
+  validateProvisionerPlan,
+  type NotificationResult,
+  type ProvisionPlanValidator,
 } from './provisioner.js';
+export {
+  validateProvisionPlan,
+  validateProvisionQuery,
+  validateSavedSearchName,
+  ProvisionPlanError,
+  SAVED_SEARCH_NAME_PATTERN,
+  type ProvisionRule,
+  type ProvisionProblem,
+  type ProvisionValidation,
+  type ValidateProvisionPlanOptions,
+} from './provision-guard.js';
+export {
+  runProvisionCanary,
+  type ProvisionCanaryOptions,
+  type ProvisionCanaryReport,
+  type ProvisionCanaryProbe,
+  type ProvisionCanaryLookupProbe,
+  type ProvisionProbeContext,
+  type ProvisionProbeResult,
+} from './provision-canary.js';
+export {
+  DEFAULT_NOTIFICATION_GROUP,
+  notificationsPath,
+  notificationTargetsPath,
+  savedSearchNotificationId,
+  savedSearchNotificationBody,
+  ensureNotificationTarget,
+  ensureSavedSearchNotification,
+  removeSavedSearchNotification,
+  removeNotificationsForSearch,
+  type NotificationTarget,
+  type SavedSearchNotification,
+  type SavedSearchNotificationConf,
+} from './notifications.js';
+export {
+  readVtResults,
+  latestRunRows,
+  runStartedMs,
+  vtResultsQuery,
+  DEFAULT_VT_RESULTS_LIMIT,
+  type ReadVtResultsOptions,
+  type VtRunQuery,
+} from './vt-results.js';
 export {
   CADENCE_OPTIONS,
   DEFAULT_CADENCE,

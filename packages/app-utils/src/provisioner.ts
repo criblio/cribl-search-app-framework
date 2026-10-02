@@ -25,6 +25,18 @@
  * credentials (see `getBearerToken`).
  */
 import { getBearerToken, type OAuthConfig } from './auth.js';
+import {
+  ProvisionPlanError,
+  validateProvisionPlan,
+  type ProvisionProblem,
+  type ProvisionRule,
+  type ProvisionValidation,
+} from './provision-guard.js';
+import {
+  ensureSavedSearchNotification,
+  removeNotificationsForSearch,
+  type SavedSearchNotification,
+} from './notifications.js';
 
 /** The subset of the Cribl saved-search object that the provisioner
  * cares about. The server fills in the rest (`user`, etc.). */
@@ -46,7 +58,9 @@ export interface ProvisionedSearch {
      * server does not store it**: an inline notification is dropped and
      * the saved search reads back with `notifications: {}`. A notification
      * that actually fires is a separate `/notifications` resource bound
-     * to the saved search by id, which this provisioner does not manage.
+     * to the saved search by id — declare it in
+     * `ProvisionerConfig.notifications` (or call
+     * `ensureSavedSearchNotification` from `/notifications`).
      *
      * Kept so existing plans still type-check, and excluded from drift
      * detection: compared against the `{}` the server returns it never
@@ -78,6 +92,41 @@ export interface ProvisionerConfig {
   plan: ProvisionedSearch[] | (() => ProvisionedSearch[]);
   /** Optional lookup tables to seed before reconciling. */
   seedLookups?: SeedLookup[];
+  /**
+   * The built-in plan guard (`validateProvisionPlan`) runs by default
+   * before anything is written, on every apply path. `false` turns it off
+   * entirely; `{ disableRules }` skips individual rules — prefer that, so
+   * one false positive does not cost the rest of the guard.
+   */
+  guard?: false | { disableRules?: ProvisionRule[] };
+  /** App-specific plan rules, run IN ADDITION to the built-in guard (a
+   * custom rule never silently replaces the dataset/lookup checks). Any
+   * problem refuses the plan exactly like a built-in one. */
+  validate?: ProvisionPlanValidator;
+  /**
+   * Saved-search → notification-target bindings to keep in place. When
+   * set (even to `[]`), the apply path also ensures each binding after its
+   * search is written, and removes every binding of a search it deletes
+   * before deleting it. Targets must already exist
+   * (`ensureNotificationTarget`).
+   */
+  notifications?: SavedSearchNotification[] | (() => SavedSearchNotification[]);
+}
+
+/** Extra plan rules for `ProvisionerConfig.validate`. */
+export type ProvisionPlanValidator = (
+  plan: ProvisionedSearch[],
+  context: { prefix: string; seedLookups: SeedLookup[] },
+) => ProvisionProblem[] | ProvisionValidation;
+
+/** Outcome of one notification step on the apply path. */
+export interface NotificationResult {
+  searchId: string;
+  step: 'ensure' | 'remove';
+  ok: boolean;
+  /** `created` / `updated` for ensure; the deleted ids for remove. */
+  detail?: string;
+  error?: string;
 }
 
 /** Minimal shape of a saved-search row as returned by the list
@@ -217,10 +266,24 @@ function isSameAsPlan(want: ProvisionedSearch, cur: SavedSearchRow): boolean {
   return true;
 }
 
+/**
+ * Execute an action list as-is. Low-level: it does not seed lookups or
+ * touch notifications (use `applyProvisioningActions` for that), but it
+ * DOES run the built-in guard over the searches it would write, unless
+ * `opts.guard` is `false` — so even a hand-rolled apply path cannot skip
+ * it by default. Throws `ProvisionPlanError` before any write.
+ */
 export async function applyProvisioningPlan(
   http: HttpClient,
   actions: PlanAction[],
+  opts: { guard?: false | { disableRules?: ProvisionRule[] } } = {},
 ): Promise<ActionResult[]> {
+  if (opts.guard !== false) {
+    const { ok, problems } = validateProvisionPlan(plannedSearches(actions), {
+      disableRules: opts.guard?.disableRules,
+    });
+    if (!ok) throw new ProvisionPlanError(problems);
+  }
   const results: ActionResult[] = [];
   for (const action of actions) {
     try {
@@ -374,9 +437,9 @@ async function runSearchJobSync(
  * lookup, overwriting each one with its sentinel row. It also
  * hardcoded one app's dataset name; `print` needs no dataset at all.)
  *
- * Exported because `reconcile()` is not the only apply path: the
- * in-app ProvisioningPanel previews with `planOnly()` and applies
- * with `applyProvisioningPlan()`, and must seed in between. */
+ * `applyProvisioningActions()` (and so `reconcile()` and the
+ * ProvisioningPanel) calls this; exported for apps that drive the
+ * low-level `applyProvisioningPlan()` themselves. */
 export async function seedLookups(http: HttpClient, lookups: SeedLookup[]): Promise<void> {
   for (const lookup of lookups) {
     if ((await lookupExists(http, lookup.name)) !== 'no') continue;
@@ -411,9 +474,124 @@ function resolvePlan(plan: ProvisionerConfig['plan']): ProvisionedSearch[] {
   return typeof plan === 'function' ? plan() : plan;
 }
 
-/** Top-level orchestrator: seed lookups, load the plan, list
- * current rows, diff, apply. Returns a structured summary the
- * caller can render however it likes. */
+/**
+ * Run the built-in guard (unless `config.guard === false`) plus
+ * `config.validate` over a plan and its seed lookups. Pure; never throws
+ * for a bad plan — `reconcile`, `planOnly` and `applyProvisioningActions`
+ * do that with a `ProvisionPlanError`.
+ */
+export function validateProvisionerPlan(
+  config: ProvisionerConfig,
+  plan: ProvisionedSearch[] = resolvePlan(config.plan),
+): ProvisionValidation {
+  const seedLookups = config.seedLookups ?? [];
+  const problems: ProvisionProblem[] = [];
+  if (config.guard !== false) {
+    problems.push(
+      ...validateProvisionPlan(plan, {
+        prefix: config.prefix,
+        seedLookups,
+        disableRules: config.guard?.disableRules,
+      }).problems,
+    );
+  }
+  if (config.validate) {
+    const extra = config.validate(plan, { prefix: config.prefix, seedLookups });
+    problems.push(...(Array.isArray(extra) ? extra : extra.problems));
+  }
+  return { ok: problems.length === 0, problems };
+}
+
+function assertValidPlan(config: ProvisionerConfig, plan: ProvisionedSearch[]): void {
+  const { ok, problems } = validateProvisionerPlan(config, plan);
+  if (!ok) throw new ProvisionPlanError(problems);
+}
+
+/** The plan entries an action list was computed from (every non-delete). */
+function plannedSearches(actions: PlanAction[]): ProvisionedSearch[] {
+  return actions.flatMap((a) => (a.kind === 'delete' ? [] : [a.want]));
+}
+
+/**
+ * Apply a previewed action list the way `reconcile()` does: validate,
+ * seed lookups, remove notifications of searches being deleted, write the
+ * searches, then ensure notification bindings. The single apply path for
+ * a CLI and `<ProvisioningPanel>`, so the two cannot diverge — the
+ * reference app's UI Apply ran no guard while its CLI did.
+ *
+ * Throws `ProvisionPlanError` (before any write) when the plan fails
+ * validation. Per-search and per-binding failures are reported in the
+ * result, never thrown.
+ */
+export async function applyProvisioningActions(
+  http: HttpClient,
+  config: ProvisionerConfig,
+  actions: PlanAction[],
+): Promise<{ results: ActionResult[]; notifications: NotificationResult[] }> {
+  assertValidPlan(config, plannedSearches(actions));
+  if (config.seedLookups?.length) {
+    await seedLookups(http, config.seedLookups);
+  }
+  const bindings = config.notifications === undefined ? undefined : resolveBindings(config.notifications);
+  const notifications: NotificationResult[] = [];
+  if (bindings) {
+    // Unbind before deleting, so a failure can never leave a binding
+    // pointing at a search that no longer exists.
+    for (const action of actions) {
+      if (action.kind !== 'delete') continue;
+      const searchId = action.current.id;
+      try {
+        const removed = await removeNotificationsForSearch(http, searchId);
+        notifications.push({ searchId, step: 'remove', ok: true, detail: removed.join(', ') || 'none' });
+      } catch (err) {
+        notifications.push({ searchId, step: 'remove', ok: false, error: errorMessage(err) });
+      }
+    }
+  }
+  const results = await applyProvisioningPlan(http, actions, { guard: false });
+  if (bindings) {
+    const written = new Set(
+      results.filter((r) => r.ok && r.action.kind !== 'delete').map((r) => (r.action as { want: ProvisionedSearch }).want.id),
+    );
+    const planned = new Set(plannedSearches(actions).map((p) => p.id));
+    for (const binding of bindings) {
+      const { searchId } = binding;
+      if (!written.has(searchId)) {
+        notifications.push({
+          searchId,
+          step: 'ensure',
+          ok: false,
+          error: planned.has(searchId)
+            ? 'skipped: the saved search failed to write'
+            : 'skipped: no saved search with this id in the plan',
+        });
+        continue;
+      }
+      try {
+        const outcome = await ensureSavedSearchNotification(http, binding);
+        notifications.push({ searchId, step: 'ensure', ok: true, detail: outcome });
+      } catch (err) {
+        notifications.push({ searchId, step: 'ensure', ok: false, error: errorMessage(err) });
+      }
+    }
+  }
+  return { results, notifications };
+}
+
+function resolveBindings(
+  bindings: NonNullable<ProvisionerConfig['notifications']>,
+): SavedSearchNotification[] {
+  return typeof bindings === 'function' ? bindings() : bindings;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Top-level orchestrator: load the plan, validate it, list current
+ * rows, diff, then apply via `applyProvisioningActions`. Throws
+ * `ProvisionPlanError` — having written nothing — when the plan fails
+ * validation. */
 export async function reconcile(
   http: HttpClient,
   config: ProvisionerConfig,
@@ -422,18 +600,20 @@ export async function reconcile(
   current: SavedSearchRow[];
   actions: PlanAction[];
   results: ActionResult[];
+  notifications: NotificationResult[];
 }> {
-  if (config.seedLookups?.length) {
-    await seedLookups(http, config.seedLookups);
-  }
   const plan = resolvePlan(config.plan);
+  assertValidPlan(config, plan);
   const current = await listProvisioned(http, config.prefix);
   const actions = diffProvisioned(plan, current);
-  const results = await applyProvisioningPlan(http, actions);
-  return { plan, current, actions, results };
+  const { results, notifications } = await applyProvisioningActions(http, config, actions);
+  return { plan, current, actions, results, notifications };
 }
 
-/** Dry-run helper: return the actions without applying them. */
+/** Dry-run helper: return the actions without applying them. Throws
+ * `ProvisionPlanError` for a plan that fails validation — a dry run that
+ * reports "would create 17 searches" for a plan that must not be applied
+ * is the wrong answer. */
 export async function planOnly(
   http: HttpClient,
   config: ProvisionerConfig,
@@ -443,6 +623,7 @@ export async function planOnly(
   actions: PlanAction[];
 }> {
   const plan = resolvePlan(config.plan);
+  assertValidPlan(config, plan);
   const current = await listProvisioned(http, config.prefix);
   const actions = diffProvisioned(plan, current);
   return { plan, current, actions };
@@ -460,7 +641,7 @@ export async function unprovisionAll(
     kind: 'delete' as const,
     current: row,
   }));
-  return applyProvisioningPlan(http, actions);
+  return applyProvisioningPlan(http, actions, { guard: false });
 }
 
 /** Factory for the in-app HTTP client: wraps the browser's
@@ -479,6 +660,10 @@ export function createBrowserHttpClient(): HttpClient {
       const text = await resp.text().catch(() => '');
       throw new Error(`${method} ${path} failed (${resp.status}): ${text.slice(0, 400)}`);
     }
+    // Search results are NDJSON, which a `json` content-type check would
+    // hand to resp.json() and fail on the second line; the search-job
+    // runner parses the text itself (same rule as `/search`'s client).
+    if (path.includes('/results?')) return resp.text();
     const ct = resp.headers.get('content-type') || '';
     if (ct.includes('json')) return resp.json();
     return resp.text();

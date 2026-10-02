@@ -64,6 +64,12 @@ by ID — never ask users to paste webhook URLs into your app.
 - `| lookup <name> on <columns>` — LEFT JOIN against a lookup table
 - `| export mode=overwrite to lookup <name>` — write to lookup
   (consumes rows — they don't go to `$vt_results`)
+- An overwrite export of zero rows can delete the lookup file. Start the
+  query with the sentinel: `print k="__sentinel__" | union (<real query>)
+  | export mode=overwrite to lookup <name>` — the reverse order
+  (`<real> | union (print …)`) skips the export when `<real>` is empty
+- `mv-expand` upstream of `export to lookup` fails the write; split into
+  a compute search and an export search
 - `| send group="search"` — send events to the Local Search HTTP
   input. Include `dataset="<name>"` in the event to route to the
   right lakehouse dataset. Do NOT use `group="default_search"`
@@ -96,10 +102,45 @@ server and creates/updates/deletes as needed. Choose a pack-specific
 prefix (e.g., `mypack__`) for managed search IDs to avoid touching
 user-created searches.
 
+### Plan guard
+Never apply a plan nobody validated. `reconcile`, `planOnly` and
+`<ProvisioningPanel>` run `validateProvisionPlan` from
+`@criblio/app-utils/provision-guard` by default and refuse a failing
+plan with `ProvisionPlanError`; add a CI test that calls it on your real
+plan so a bad search fails the build, not a user's Apply:
+
+```ts
+import { validateProvisionPlan } from '@criblio/app-utils/provision-guard';
+expect(validateProvisionPlan(getPlan(), { prefix: 'myapp__', seedLookups: SEEDS }).problems).toEqual([]);
+```
+
+App-specific rules go in `ProvisionerConfig.validate`; they add to the
+built-in rules. Disable a single misfiring rule with
+`guard: { disableRules: ['…'] }` rather than `guard: false`.
+
 ### Panel caching
-Scheduled searches write to `$vt_results`. The UI reads all panels
-in a single batched query using `jobName in (...)`. Cache miss falls
-back to live queries gracefully.
+Scheduled searches write to `$vt_results`. Read all panels in one
+batched job with `readVtResults(jobNames)` from
+`@criblio/app-utils/vt-results`; a missing key is a cache miss — fall
+back to the live query:
+
+```ts
+const cached = await readVtResults(['myapp__summary', 'myapp__series']);
+const summary = cached.get('myapp__summary') ?? await runQuery(liveSummaryKql);
+```
+
+### Post-reconcile canary
+After provisioning, prove the searches produce:
+`runProvisionCanary(http, { sentinelSearchId, lookupProbe, firstInstall })`
+from `@criblio/app-utils/provision-canary`, or pass the same options as
+`<ProvisioningPanel canary={…}>`.
+
+### Notifications
+Bind a scheduled search to a notification target with
+`ensureSavedSearchNotification(http, { searchId, targetId, conf })` from
+`@criblio/app-utils/notifications`, or declare
+`ProvisionerConfig.notifications`. `schedule.notifications` in the
+saved-search body is silently dropped by the server.
 
 ### Lookup seeding
 `| export to lookup` requires the lookup to exist at search creation
