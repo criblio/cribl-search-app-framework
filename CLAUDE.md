@@ -87,6 +87,13 @@ browser TS graph. Common patterns:
 - `apiUrl()` — base URL for Cribl API calls inside the iframe
 - `getBearerToken(config)` — OAuth client-credentials exchange
   (Node side, used by deploy/provision scripts)
+- `getCachedBearerToken(config, { refreshMarginMs = 60_000 })` — the same
+  with a per-process cache keyed by endpoint + credentials, refetched when
+  under a minute remains (a token handed out seconds before expiry failed
+  API calls mid page-load); concurrent callers share one exchange and a
+  failure is never cached. `fetchBearerToken` returns `{ accessToken,
+  expiresAt }`; `clearBearerTokenCache()` resets. `createNodeHttpClient`
+  uses the cache.
 - `oauthEndpoints(baseUrl)` — pick prod vs staging OAuth domain
 - `loadSettings() / saveSettings()` — KV-store-backed app settings
 - `loadDotEnv(path)` — `.env` parser for Node scripts
@@ -416,6 +423,30 @@ const verdict = await runGeneratedEventCanary(events, runQuery, { dataset: 'main
 ```ts
 const kql = `${evaluatorRows}\n${alertStateKql({ fireAfter: 2, clearAfter: 3 })}\n${exportToSearchClause(ds)}`;
 ```
+**Viz** (`@cribl/app-utils/viz`, `/graph`)
+
+- `<LineChart>`, `<StackedColumnChart>`, `<Sparkline>`, `<BarList>`,
+  `<StatTile>`, `<Panel>`, `<DataTable>` — d3 charts on the design tokens.
+  `StackedColumnChart` takes LineChart's props for the shared concerns
+  (`title, subtitle, series, yFormat, height, error, refreshing,
+  emptyMessage`; series order = stack order, bottom up) and shares its
+  stylesheet so sibling panels match:
+  `<StackedColumnChart title="Status mix" series={[{ name: '2xx', color: SERIES_COLORS[1], data }]} />`.
+  `stackColumns(series)` is its pure layout.
+- `entityColor(id, lightness = 50)` / `entityHue(id)` — deterministic
+  identity colour (`hsl(hash % 360, 60%, L%)`). Identity is not health: a
+  waterfall must keep a call chain followable, so health is added as a
+  second channel, never substituted. `SERIES_COLORS` is for ≤8 series in
+  one chart; `entityColor` is "the same entity looks the same everywhere".
+- `buildTimeline(items, { id, parentId, start, end, windowStart?, windowEnd? })`
+  → `{ windowStart, windowEnd, duration, rootId, rows }`, rows depth-first
+  with `depth`, `offset`/`width` fractions, `clippedStart`/`clippedEnd`,
+  `inWindow`. Scaled to the ROOT item, not min/max of all items — a
+  clock-skewed child stamped before its parent squashed the real work into
+  the right 8% of the axis. Orphans become roots; cycles are kept.
+- `/graph`: `<NetworkGraph>`, `useForceLayout`, `usePanZoom`, `linkKeys`.
+  Links are identified by `id` if given, else `source>target` (+`#n` for
+  parallel edges); data-only updates match by that key, not array index.
 
 **Styles**
 
@@ -556,6 +587,14 @@ why only the packer was superseded.
   and deterministic production CycloneDX SBOM
 - `cribl-app-security` — SHA-pinned Action, dependency-license, and
   tracked-secret gates
+- `@criblio/app-tooling/playwright` — live-workspace test helpers (needs
+  `@playwright/test` and `@criblio/app-utils` in the app): `installCriblHostGlobals`,
+  `gotoApp`, `appFrame`, `dismissHostAnnouncements`, `loginSetup`,
+  `runSearch`, `loadTestEnv`, `criblCredentialsFromEnv`. Opening
+  `/app-ui/<app>/` directly gives an empty `#root` and 401s, because the
+  host globals and Bearer fetch wrapper are missing; these put them back.
+  `docs/testing.md` has the recommended `playwright.config.ts`,
+  `auth.setup.ts` and `vitest.config.ts`.
 
 The tooling package owns mechanisms. Consumer package scripts and CI
 provide app policy such as `--require-empty-proxies` /

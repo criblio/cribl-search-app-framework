@@ -24,7 +24,16 @@ export {
   type ResilienceBoundaryProps,
   type ResilienceFallbackProps,
 } from './ResilienceBoundary.js';
-export { getBearerToken, oauthEndpoints, type OAuthConfig } from './auth.js';
+export {
+  getBearerToken,
+  fetchBearerToken,
+  getCachedBearerToken,
+  clearBearerTokenCache,
+  oauthEndpoints,
+  type OAuthConfig,
+  type BearerToken,
+  type CachedBearerTokenOptions,
+} from './auth.js';
 export {
   KvError,
   kvGetJson,

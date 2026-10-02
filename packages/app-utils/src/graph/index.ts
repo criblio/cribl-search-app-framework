@@ -8,3 +8,4 @@ export {
 export { usePanZoom, type PanZoomTransform, type UsePanZoomResult } from './usePanZoom.js';
 export { default as ZoomControls } from './ZoomControls.js';
 export { default as NetworkGraph, type NetworkGraphProps } from './NetworkGraph.js';
+export { linkKeys } from './linkKeys.js';
