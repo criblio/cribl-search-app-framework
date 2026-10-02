@@ -16,18 +16,21 @@
  * subscribe via `useDataset()` which plugs this into React's
  * useSyncExternalStore.
  *
+ * The mechanics are `createStore` (./create-store.ts); this module keeps
+ * its own named API and trims the name before storing it.
+ *
  * The companion <DatasetProvider> (./DatasetProvider.tsx) loads the
  * saved value from the KV store on mount and pushes it here.
  */
 
 import { useSyncExternalStore } from 'react';
+import { createStore } from './create-store.js';
 
-let currentDataset = '';
-const listeners = new Set<() => void>();
+const store = createStore('');
 
 /** Current active dataset name. Empty string until set. */
 export function getCurrentDataset(): string {
-  return currentDataset;
+  return store.get();
 }
 
 /**
@@ -37,24 +40,12 @@ export function getCurrentDataset(): string {
  * a new value on the Settings page.
  */
 export function setCurrentDataset(name: string): void {
-  const next = (name || '').trim();
-  if (next === currentDataset) return;
-  currentDataset = next;
-  for (const l of listeners) {
-    try {
-      l();
-    } catch {
-      /* listener errors shouldn't block others */
-    }
-  }
+  store.set((name || '').trim());
 }
 
 /** Subscribe to dataset changes. Returns an unsubscribe function. */
 export function subscribeDataset(fn: () => void): () => void {
-  listeners.add(fn);
-  return () => {
-    listeners.delete(fn);
-  };
+  return store.subscribe(fn);
 }
 
 /**

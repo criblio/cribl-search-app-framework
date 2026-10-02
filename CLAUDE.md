@@ -90,6 +90,39 @@ browser TS graph. Common patterns:
 - `oauthEndpoints(baseUrl)` — pick prod vs staging OAuth domain
 - `loadSettings() / saveSettings()` — KV-store-backed app settings
 - `loadDotEnv(path)` — `.env` parser for Node scripts
+- `runWithLimit(items, limit, worker, { signal }?)` /
+  `runWithLimitSettled(...)` (`@criblio/app-utils/search`) — bounded
+  fan-out for per-item searches; results in input order. Cribl Search
+  caps concurrent jobs per cluster at ~20 and a page already holds
+  several, so APM's unbounded 22-query Spotlight returned 429s until it
+  ran at 4 — use `SEARCH_FANOUT_LIMIT` (= 4). `runWithLimit` resolves `R[]` or rejects with the
+  lowest-index error, but only after every item has settled (one failure
+  never stops the rest); the settled form returns
+  `PromiseSettledResult<R>[]` for per-item errors. Once `signal` aborts,
+  unstarted items reject with its reason; the worker receives the signal
+  as its third argument to cancel its own job.
+
+  ```ts
+  const rows = await runWithLimit(attrs, SEARCH_FANOUT_LIMIT, (attr, _i, signal) =>
+    runQuery(distributionKql(attr), '-1h', 'now', 20, signal));
+  ```
+
+**Module-level stores** (`@criblio/app-utils/store`)
+
+- `createStore<T>(initial: T): Store<T>` — `{ get(): T; set(v: T): void;
+  subscribe(fn: (v: T) => void): () => void }`. `set` is a no-op when
+  `Object.is`-equal; a throwing listener is swallowed so the others still
+  see the change. `get`/`set`/`subscribe` are safe to destructure.
+- `useStore(store): T` — React hook on `useSyncExternalStore`.
+- Use it for any value non-React code must read (feature flags, query
+  options). A flag is `createStore(false)` — no `createFlag` helper; the
+  default is a required argument so "KV unreachable ⇒ feature dark" is
+  stated per flag, never inherited. `dataset` and `cadence` are built on it.
+
+  ```ts
+  export const lowVolumeMode = createStore(false); // OFF until KV says otherwise
+  const enabled = useStore(lowVolumeMode);
+  ```
 
 **Agent tools** (`@cribl/app-utils/agent-tools`, `/agent-tool-defs`,
 `/cribl-api-tool`, `/openapi-digest`, `/cell-cribl`)

@@ -14,6 +14,8 @@
  * those two paths read/write KV differently.
  */
 
+import { createStore } from './create-store.js';
+
 export type CadenceOption = '1m' | '2m' | '5m' | '10m';
 
 export interface CadenceChoice {
@@ -39,15 +41,14 @@ const CADENCE_TO_CRON: Record<CadenceOption, string> = {
   '10m': '*/10 * * * *',
 };
 
-let current: CadenceOption = DEFAULT_CADENCE;
-const listeners = new Set<() => void>();
+const store = createStore<CadenceOption>(DEFAULT_CADENCE);
 
 export function getSearchCadence(): CadenceOption {
-  return current;
+  return store.get();
 }
 
 export function getSearchCadenceCron(): string {
-  return CADENCE_TO_CRON[current];
+  return CADENCE_TO_CRON[store.get()];
 }
 
 export function cadenceToCron(c: CadenceOption): string {
@@ -61,22 +62,11 @@ export function setSearchCadence(value: string): void {
   const next = (CADENCE_TO_CRON as Record<string, string | undefined>)[value]
     ? (value as CadenceOption)
     : DEFAULT_CADENCE;
-  if (next === current) return;
-  current = next;
-  for (const l of listeners) {
-    try {
-      l();
-    } catch {
-      /* listener errors shouldn't block others */
-    }
-  }
+  store.set(next);
 }
 
 export function subscribeSearchCadence(fn: () => void): () => void {
-  listeners.add(fn);
-  return () => {
-    listeners.delete(fn);
-  };
+  return store.subscribe(fn);
 }
 
 /**
