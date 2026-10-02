@@ -4,6 +4,7 @@ import {
   defineGeneratedEvents,
   eventIdExpr,
   exportToSearchClause,
+  kqlExpr,
   runGeneratedEventCanary,
   storedDatatypePredicate,
 } from '../generated-events.js';
@@ -87,6 +88,63 @@ describe('write boundary', () => {
       .toThrow(KqlSafetyError);
     expect(() => defineGeneratedEvents({ datatypes: ['a', 'a'], schemaVersion: 1, canaryProducer: 'p' })).toThrow(/unique/);
     expect(() => defineGeneratedEvents({ datatypes: ['a'], schemaVersion: 0, canaryProducer: 'p' })).toThrow(KqlSafetyError);
+  });
+});
+
+describe('per-run canary fields and expressions', () => {
+  const perRun = defineGeneratedEvents({
+    datatypes: ['myapp_alert', 'myapp_deploy'],
+    schemaVersion: 1,
+    canaryProducer: 'myapp_contract_canary',
+    canaryFields: {
+      myapp_alert: (id) => ({ record_kind: 'evaluation', evaluation_id: `eval-${id}`, evaluated_at: kqlExpr('now()') }),
+      myapp_deploy: { version: kqlExpr('strcat("canary-", tostring(tolong(now())))'), first_seen: kqlExpr('tolong(now())') },
+    },
+  });
+
+  it('a callback gets the canary id; expressions are emitted unquoted', () => {
+    expect(perRun.canarySend('c7', 'otel')).toMatchInlineSnapshot(`
+      "print datatype="myapp_alert", schema_version=tolong(1), event_id="c7:myapp_alert", producer="myapp_contract_canary", dataset="otel", is_canary=true, record_kind="evaluation", evaluation_id="eval-c7", evaluated_at=now()
+      | union (print datatype="myapp_deploy", schema_version=tolong(1), event_id="c7:myapp_deploy", producer="myapp_contract_canary", dataset="otel", is_canary=true, version=strcat("canary-", tostring(tolong(now()))), first_seen=tolong(now()))
+      | export tee=true to search "otel""
+    `);
+    // Each send calls the callback afresh, with that send's id.
+    expect(perRun.canarySend('c8', 'otel')).toContain('evaluation_id="eval-c8"');
+  });
+
+  it('a plain string that looks like an expression stays a literal', () => {
+    const e = defineGeneratedEvents({ datatypes: ['a'], schemaVersion: 1, canaryProducer: 'p', canaryFields: { a: { t: 'now()', q: 'x", evil=1' } } });
+    expect(e.canarySend('c1', 'otel')).toContain('t="now()", q="x\\", evil=1"');
+  });
+
+  it('only kqlExpr() mints an expression: a look-alike object is rejected', () => {
+    const forged = { kql: 'now()' } as unknown as ReturnType<typeof kqlExpr>;
+    expect(() => defineGeneratedEvents({ datatypes: ['a'], schemaVersion: 1, canaryProducer: 'p', canaryFields: { a: { t: forged } } }))
+      .toThrow(/kqlExpr/);
+    const viaCallback = defineGeneratedEvents({ datatypes: ['a'], schemaVersion: 1, canaryProducer: 'p', canaryFields: { a: () => ({ t: forged }) } });
+    expect(() => viaCallback.canarySend('c1', 'otel')).toThrow(KqlSafetyError);
+  });
+
+  it('kqlExpr refuses text that could end the print and start another stage', () => {
+    for (const bad of ['', '   ', 'now() | send group="x"', 'now();drop', 'now()\n| where true', 'x'.repeat(513)]) {
+      expect(() => kqlExpr(bad), JSON.stringify(bad)).toThrow(KqlSafetyError);
+    }
+    expect(kqlExpr(' now() ').kql).toBe('now()');
+    expect(Object.isFrozen(kqlExpr('now()'))).toBe(true);
+  });
+
+  it('validates callback results like static fields, at send time', () => {
+    const reserved = defineGeneratedEvents({ datatypes: ['a'], schemaVersion: 1, canaryProducer: 'p', canaryFields: { a: () => ({ event_id: 'x' }) } });
+    expect(() => reserved.canarySend('c1', 'otel')).toThrow(/set by the contract/);
+    const badName = defineGeneratedEvents({ datatypes: ['a'], schemaVersion: 1, canaryProducer: 'p', canaryFields: { a: () => ({ 'x=1|': 'y' }) } });
+    expect(() => badName.canarySend('c1', 'otel')).toThrow(KqlSafetyError);
+    const nan = defineGeneratedEvents({ datatypes: ['a'], schemaVersion: 1, canaryProducer: 'p', canaryFields: { a: () => ({ n: Number.NaN }) } });
+    expect(() => nan.canarySend('c1', 'otel')).toThrow(/not finite/);
+    // An invalid canary id is rejected before the callback ever sees it.
+    const cb = vi.fn(() => ({}));
+    const guarded = defineGeneratedEvents({ datatypes: ['a'], schemaVersion: 1, canaryProducer: 'p', canaryFields: { a: cb } });
+    expect(() => guarded.canarySend('a b', 'otel')).toThrow(KqlSafetyError);
+    expect(cb).not.toHaveBeenCalled();
   });
 });
 

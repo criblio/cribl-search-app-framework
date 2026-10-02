@@ -411,7 +411,15 @@ Every failure these exist for reported success in every API layer.
   family), so only the gap `[horizon, earliestCovered)` is filled, newest
   window first (resumable; adding a family backfills only that family).
   Fixed 6h windows by default (`emitter.windowSeconds`, or
-  `deps.planWindows` + `planDensityWindows` for per-event emitters).
+  `deps.planWindows` + `planDensityWindows(bins, binSec, max, gap)` for
+  per-event emitters). `planWindows` output must tile the gap exactly —
+  contiguous, non-overlapping, inside it — or that emitter fails
+  (`status: 'failed'`, `error` says why) before any export: a window past
+  the gap's top re-writes covered minutes and the store doubles them.
+  `windowTilingError(windows, gap)` is the check. Pass `gap` to
+  `planDensityWindows` and it ignores bins outside the gap, clamps to it
+  and bridges empty bins (count bins are coarser than the minute-aligned
+  gap); without it the windows follow the bins, holes included.
 - The store is not idempotent, so: probe once per emitter, never per window
   (a window's top edge IS the first covered bin, so a per-window probe
   skips it — APM got 6h holes); halve-and-retry a window that drops events,
@@ -422,7 +430,16 @@ Every failure these exist for reported success in every API layer.
   from the export's own row — a `completed` job can drop every event.
   `createMetricsCoverageProbe()` is the matching `earliestCoveredSec`
   (histograms probe via `histogram_quantile`; a bare `count()` of one is
-  empty).
+  empty). From a Node script give it
+  `createNodeMetricsTransport(oauth)` (`/provisioner`, beside
+  `createNodeHttpClient`): the metrics query path with a
+  `getCachedBearerToken` Bearer, looked up per query so a long run
+  refreshes; a non-2xx throws.
+- `emitter.coverageLabels: { quantile: 'p95' }` restricts the default
+  probe to those exact label values (`count(m{quantile="p95"})`) for an
+  emitter that writes one series of a shared family.
+  `coverageProbeQuery(metric, kind, { splitBy?, labels? })` (a string third
+  argument is still `splitBy`); names are validated, values escaped.
 - `emitter.coverageSplit: { label, values }` — probe per label value for
   families whose series share one name (percentile gauges with a
   `quantile` label). `count(metric)` is covered wherever ANY series
@@ -438,6 +455,14 @@ const result = await runMetricsBackfill(emitters, {
   runExport: (q, e, l) => runMetricsExport(http, q, e, l),
   earliestCoveredSec: createMetricsCoverageProbe(),
 }, { horizonSec: 86_400, nowSec: Date.now() / 1000, onProgress, signal });
+
+// Node (deploy script): same algorithm, Node transports.
+const http = await createNodeHttpClient(oauth);
+const deps = {
+  runExport: (q, e, l) => runMetricsExport(http, q, e, l),
+  earliestCoveredSec: createMetricsCoverageProbe({ transport: createNodeMetricsTransport(oauth) }),
+  planWindows: async (emitter, gap) => planDensityWindows(await countBins(gap), 300, SAFE_MAX_EXPORT_EVENTS, gap),
+};
 ```
 
 **Generated events** (`@criblio/app-utils/generated-events`)
@@ -453,9 +478,20 @@ const result = await runMetricsBackfill(emitters, {
   binds an app's datatypes into `predicate`, `canarySend`, `canaryRead`,
   `canaryVerdict`; `runGeneratedEventCanary(events, run, { dataset })`
   proves the write→read round trip after provisioning.
+- `canaryFields[datatype]` is an object of literals (strings, numbers,
+  booleans, always serialised as literals — a string `'now()'` stays the
+  string) or `kqlExpr('now()')` expressions, or a callback
+  `(canaryId) => fields` for per-run values (`evaluation_id`, `version`).
+  Callback results are validated like static fields on every send.
+  `kqlExpr` is the only way in unquoted — trusted code only; it refuses
+  empty text, newlines, `|` and `;`, and a look-alike `{ kql }` object is
+  rejected.
 
 ```ts
-const events = defineGeneratedEvents({ datatypes: ['myapp_alert'], schemaVersion: 1, canaryProducer: 'myapp_canary' });
+const events = defineGeneratedEvents({
+  datatypes: ['myapp_alert'], schemaVersion: 1, canaryProducer: 'myapp_canary',
+  canaryFields: { myapp_alert: (id) => ({ evaluation_id: `canary-${id}`, evaluated_at: kqlExpr('now()') }) },
+});
 const verdict = await runGeneratedEventCanary(events, runQuery, { dataset: 'main' });
 ```
 
@@ -468,6 +504,14 @@ const verdict = await runGeneratedEventCanary(events, runQuery, { dataset: 'main
   emit the same machine as KQL for the scheduled evaluator. Both come from
   one arm table, and the tests run the emitted KQL against the TS for every
   transition, so the UI and the evaluator cannot drift.
+- `alertStateKql({ defaultPrevStatus: false })` omits the leading
+  `prev_status=iff(isnotempty(prev_status), prev_status, "ok")` stage for a
+  consumer that defaults upstream (then a null/empty prior status reads
+  `ok`, not `pending`, so default it yourself). To splice your own stages,
+  `alertStateStages(opts)` returns `{ defaultPrevStatus, counters, state }`
+  (joined with `\n` they ARE `alertStateKql`) and
+  `alertArmConditions(opts)` returns `{ arms: [{ condition, next,
+  transition }], fire, clear }` — the exact condition strings embedded.
 
 ```ts
 const kql = `${evaluatorRows}\n${alertStateKql({ fireAfter: 2, clearAfter: 3 })}\n${exportToSearchClause(ds)}`;

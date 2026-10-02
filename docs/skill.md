@@ -178,8 +178,15 @@ from `@criblio/app-utils/alert-state` and reason about it in TS with
 `nextAlertState` — the two share one arm table, so they cannot drift.
 An alert arm that only emits rows while bad never sees a good
 evaluation and so never resolves: emit a row for every evaluated key.
+If your join already defaults the prior status (`iff(isnotnull(persisted_status), persisted_status, "ok")`),
+pass `defaultPrevStatus: false`; composing stages by hand, use
+`alertStateStages` / `alertArmConditions` rather than copying the arms,
+so the result stays byte-identical to the tested step.
 Prove the event write path after provisioning with
-`runGeneratedEventCanary`.
+`runGeneratedEventCanary`. Make canaries look like real rows — readers
+that filter on `evaluation_id` or a timestamp must still see them — with
+a `canaryFields` callback `(canaryId) => ({ evaluation_id: 'canary-' + canaryId, evaluated_at: kqlExpr('now()') })`.
+Plain strings are always literals; only `kqlExpr` emits raw KQL.
 
 ### Metrics backfill coverage
 `runMetricsBackfill` fills only the history a family lacks, and
@@ -203,7 +210,17 @@ series sets its top. A listed value with no sample at all means
 uncovered. List the values; a series that was never written cannot be
 discovered. The emitter re-emits every series over the gap, so the older
 series are written twice there — fine for a gauge, double-counting for a
-counter; split gauge-like families only.
+counter; split gauge-like families only. An emitter that writes ONE
+series of a shared family (one emitter per quantile) can instead set
+`coverageLabels: { quantile: 'p95' }`, probing `count(m{quantile="p95"})`.
+
+A custom `planWindows` must tile the gap exactly or the emitter fails
+before exporting: count bins are coarser than the minute-aligned gap, so
+pass the gap to `planDensityWindows(bins, binSec, max, gap)` and it clamps
+and bridges for you. From a Node deploy script, probe with
+`createMetricsCoverageProbe({ transport: createNodeMetricsTransport(oauth) })`
+(`@criblio/app-utils/provisioner`) instead of hand-rolling token and
+NDJSON code.
 
 ### Cadence
 Make scheduled search cadence configurable via a Settings page

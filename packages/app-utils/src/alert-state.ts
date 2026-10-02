@@ -144,6 +144,15 @@ export interface AlertKqlFields {
 export interface AlertKqlOptions extends Partial<AlertDebounce> {
   /** Column names; defaults are the snake_case names in {@link alertStateKql}. */
   fields?: AlertKqlFields;
+  /**
+   * {@link alertStateKql} only. `false` omits the leading
+   * `prev_status=iff(isnotempty(prev_status), prev_status, "ok")` stage, for
+   * a consumer that already defaults the prior status upstream (e.g. from a
+   * `leftouter` join's null). The arms then require a non-empty prior
+   * status: a null or `""` one matches no arm and reads `ok`, so a first
+   * bad evaluation would not enter `pending`. Default `true`.
+   */
+  defaultPrevStatus?: boolean;
 }
 
 const FIELD_DEFAULTS: Required<AlertKqlFields> = {
@@ -181,6 +190,42 @@ function armCondition(arm: Arm, f: Required<AlertKqlFields>, fire: string, clear
   return parts.join(' and ');
 }
 
+/** One row of the arm table as KQL: the condition and where it leads. */
+export interface AlertArmKql {
+  /** e.g. `is_bad and prev_status == "pending" and new_bad >= 2`. */
+  condition: string;
+  next: AlertStatus;
+  /** Non-empty on the single fire arm and the single resolve arm. */
+  transition: AlertTransition;
+}
+
+export interface AlertArmConditions {
+  /** Every arm in evaluation order; the first match wins, the default is `ok`. */
+  arms: AlertArmKql[];
+  /** The pending→firing condition — also the `fire_count` increment guard. */
+  fire: string;
+  /** The resolving→ok condition. */
+  clear: string;
+}
+
+/**
+ * The arm table rendered as KQL conditions, for a consumer composing its
+ * own stages. These are the exact strings {@link alertCaseKql},
+ * {@link alertTransitionKql} and {@link alertStateKql} embed.
+ */
+export function alertArmConditions(opts: AlertKqlOptions = {}): AlertArmConditions {
+  const { f, fire, clear } = resolveOptions(opts);
+  return {
+    arms: ARMS.map((arm) => ({
+      condition: armCondition(arm, f, fire, clear),
+      next: arm.next,
+      transition: arm === FIRE_ARM ? 'firing' : arm === CLEAR_ARM ? 'resolved' : '',
+    })),
+    fire: armCondition(FIRE_ARM, f, fire, clear),
+    clear: armCondition(CLEAR_ARM, f, fire, clear),
+  };
+}
+
 /**
  * The status `case()` expression: one arm per row of the shared table, in
  * order, defaulting to `"ok"`. Expects `prevStatus` already defaulted to
@@ -201,6 +246,40 @@ export function alertTransitionKql(opts: AlertKqlOptions = {}): string {
 }
 
 /**
+ * The three pipeline stages of {@link alertStateKql}, separately, so a
+ * consumer can splice its own stages between them and still emit
+ * byte-identical steps. Each is one or more lines starting with `| extend`.
+ */
+export interface AlertStateStages {
+  /** `| extend prev_status=iff(isnotempty(prev_status), prev_status, "ok")`. */
+  defaultPrevStatus: string;
+  /** `| extend new_bad=…, new_good=…` — the status arms read these. */
+  counters: string;
+  /** `| extend alert_status=…, consecutive_bad, consecutive_good, fire_count, transitioned_to`. */
+  state: string;
+}
+
+/** Lower-level builder behind {@link alertStateKql}. Ignores `defaultPrevStatus`. */
+export function alertStateStages(opts: AlertKqlOptions = {}): AlertStateStages {
+  const { f, fire, clear } = resolveOptions(opts);
+  const indent = (text: string) => text.split('\n').join('\n         ');
+  return {
+    defaultPrevStatus: `| extend ${f.prevStatus}=iff(isnotempty(${f.prevStatus}), ${f.prevStatus}, "ok")`,
+    counters: [
+      `| extend ${f.newBad}=iff(${f.isBad}, ${f.prevBad} + 1, 0),`,
+      `         ${f.newGood}=iff(${f.isBad}, 0, ${f.prevGood} + 1)`,
+    ].join('\n'),
+    state: [
+      `| extend alert_status=${indent(alertCaseKql(opts))},`,
+      `         consecutive_bad=${f.newBad},`,
+      `         consecutive_good=${f.newGood},`,
+      `         fire_count=iff(${armCondition(FIRE_ARM, f, fire, clear)}, ${f.prevFireCount} + 1, ${f.prevFireCount}),`,
+      `         transitioned_to=${indent(alertTransitionKql(opts))}`,
+    ].join('\n'),
+  };
+}
+
+/**
  * The whole state step as pipeline stages: default a missing prior status
  * to `"ok"`, counters next (the status arms read them), then status,
  * persisted counters, fire count and transition. Input columns:
@@ -208,18 +287,16 @@ export function alertTransitionKql(opts: AlertKqlOptions = {}): string {
  * `prev_bad`, `prev_good`, `prev_fire_count`. Output columns:
  * `alert_status`, `consecutive_bad`, `consecutive_good`, `fire_count`,
  * `transitioned_to` (plus the intermediate `new_bad`/`new_good`).
+ *
+ * `defaultPrevStatus: false` drops the first stage for a consumer that
+ * defaults the prior status itself; {@link alertStateStages} returns the
+ * stages separately.
  */
 export function alertStateKql(opts: AlertKqlOptions = {}): string {
-  const { f, fire, clear } = resolveOptions(opts);
-  const indent = (text: string) => text.split('\n').join('\n         ');
+  const stages = alertStateStages(opts);
   return [
-    `| extend ${f.prevStatus}=iff(isnotempty(${f.prevStatus}), ${f.prevStatus}, "ok")`,
-    `| extend ${f.newBad}=iff(${f.isBad}, ${f.prevBad} + 1, 0),`,
-    `         ${f.newGood}=iff(${f.isBad}, 0, ${f.prevGood} + 1)`,
-    `| extend alert_status=${indent(alertCaseKql(opts))},`,
-    `         consecutive_bad=${f.newBad},`,
-    `         consecutive_good=${f.newGood},`,
-    `         fire_count=iff(${armCondition(FIRE_ARM, f, fire, clear)}, ${f.prevFireCount} + 1, ${f.prevFireCount}),`,
-    `         transitioned_to=${indent(alertTransitionKql(opts))}`,
+    ...(opts.defaultPrevStatus === false ? [] : [stages.defaultPrevStatus]),
+    stages.counters,
+    stages.state,
   ].join('\n');
 }

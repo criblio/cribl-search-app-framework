@@ -64,6 +64,8 @@ export {
   savedSearchesPath,
   createBrowserHttpClient,
   createNodeHttpClient,
+  createNodeMetricsTransport,
+  type NodeMetricsTransportOptions,
   type ProvisionedSearch,
   type ProvisionerConfig,
   type SeedLookup,
