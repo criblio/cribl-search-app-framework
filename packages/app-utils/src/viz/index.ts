@@ -5,12 +5,33 @@
  */
 
 export { default as LineChart, type LineSeries } from './LineChart.js';
+export { default as StackedColumnChart } from './StackedColumnChart.js';
+export {
+  stackColumns,
+  type StackedSeries,
+  type StackedSegment,
+  type StackedBucket,
+  type StackedColumns,
+} from './stackColumns.js';
 export { default as Sparkline } from './Sparkline.js';
 export { default as Panel } from './Panel.js';
 export { default as StatTile } from './StatTile.js';
 export { default as BarList, type BarListItem } from './BarList.js';
 export { default as DataTable, type Column } from './DataTable.js';
-export { SERIES_COLORS, MAX_SERIES, seriesColor, CHART_INK } from './palette.js';
+export {
+  SERIES_COLORS,
+  MAX_SERIES,
+  seriesColor,
+  CHART_INK,
+  entityHue,
+  entityColor,
+} from './palette.js';
+export {
+  buildTimeline,
+  type Timeline,
+  type TimelineRow,
+  type TimelineAccessors,
+} from './timeline.js';
 export {
   formatBytes,
   formatBytesRate,

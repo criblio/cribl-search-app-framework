@@ -27,6 +27,7 @@ import {
   type SimulationNodeDatum,
   type SimulationLinkDatum,
 } from 'd3-force';
+import { linkKeys } from './linkKeys.js';
 
 /** Minimum node shape: stable id + a size the radius function can use. */
 export interface ForceNode extends SimulationNodeDatum {
@@ -37,6 +38,8 @@ export interface ForceNode extends SimulationNodeDatum {
 /** Minimum link shape: endpoints + a value (weight) for visual encoding. */
 export type ForceLink<N extends ForceNode = ForceNode> = SimulationLinkDatum<N> & {
   value: number;
+  /** Optional stable id; tells parallel edges between one pair apart (see linkKeys). */
+  id?: string;
 };
 
 export interface ForceConfig {
@@ -216,11 +219,20 @@ export function useForceLayout<N extends ForceNode, L extends ForceLink<N>>({
       }
     }
 
-    for (let i = 0; i < simLinks.length && i < links.length; i++) {
-      for (const [key, value] of Object.entries(links[i])) {
-        if (!SIM_FIELDS.has(key)) (simLinks[i] as Record<string, unknown>)[key] = value;
+    // Match links by identity, not array index: the topology key is sorted,
+    // so a reordered links array keeps the simulation but used to pour each
+    // link's metrics onto a different edge.
+    const inputByKey = new Map<string, L>();
+    const inputKeys = linkKeys(links);
+    links.forEach((l, i) => inputByKey.set(inputKeys[i], l));
+    const simKeys = linkKeys(simLinks);
+    simLinks.forEach((sl, i) => {
+      const input = inputByKey.get(simKeys[i]);
+      if (!input) return;
+      for (const [key, value] of Object.entries(input)) {
+        if (!SIM_FIELDS.has(key)) (sl as Record<string, unknown>)[key] = value;
       }
-    }
+    });
 
     setTick((t) => t + 1);
   }, [nodes, links]);

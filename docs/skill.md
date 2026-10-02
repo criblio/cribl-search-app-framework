@@ -253,6 +253,14 @@ when topology changes. Data-only updates (same nodes, new metric
 values) should mutate existing objects in place — no simulation
 restart, no visual movement.
 
+### Charts and timelines
+Use `@criblio/app-utils/viz` rather than hand-rolling: `LineChart` and
+`StackedColumnChart` share props and styling; colour a recurring entity
+with `entityColor(id)` (identity) and keep health as a separate channel;
+lay out any parent/child waterfall with `buildTimeline(items, { id,
+parentId, start, end })`, which scales to the root so clock-skewed
+children are clipped instead of crushing the axis.
+
 ## Testing patterns
 
 ### CI
@@ -260,18 +268,24 @@ Run unit tests (Vitest), type checking (tsc --noEmit), and build
 on every push/PR via GitHub Actions.
 
 ### Playwright (e2e)
-- Auth via `installCriblHostGlobals(page)` which injects
-  `CRIBL_BASE_PATH`, `CRIBL_API_URL`, and a Bearer token fetch
-  wrapper via `addInitScript`
-- Navigate with a helper function that prepends the pack base path
-- Can't navigate directly to sub-routes (server returns 404) —
-  must load the base path first, then use React Router navigation
-  or click nav links
+Import the helpers from `@criblio/app-tooling/playwright`; copy the
+configs from the framework's `docs/testing.md`.
+- `installCriblHostGlobals(page, { ...criblCredentialsFromEnv(), appId })`
+  injects `CRIBL_BASE_PATH`, `CRIBL_API_URL`, and a Bearer token fetch
+  wrapper via `addInitScript` (without them: empty `#root`, 401s)
+- `const app = await gotoApp(page, appId)` returns the app iframe's
+  `FrameLocator`; route every locator through it — the top page is the
+  workspace shell
+- Can't navigate directly to sub-routes (the shell ignores the deep
+  path) — load the app first, then click nav links inside the frame
+- `loginSetup(page, { email, password, storageStatePath })` in
+  `tests/auth.setup.ts` handles the Auth0 two-step login
 
 ### KQL assertions
-Use a `runQuery()` helper for server-side validation in tests:
+Use `runSearch()` for server-side validation in tests (150 s budget —
+staging pools queue serial queries):
 ```typescript
-const rows = await runQuery('dataset="$vt_results" | where ...');
+const rows = await runSearch(criblCredentialsFromEnv(), 'dataset="$vt_results" | where ...');
 assert(rows.length > 0);
 ```
 

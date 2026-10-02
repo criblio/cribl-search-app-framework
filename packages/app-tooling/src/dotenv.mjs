@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 
-export async function loadDotEnv(path) {
-  const text = await readFile(path, 'utf8');
+/** Parse `.env` text: KEY=value lines, `#` comments, optional matching quotes. */
+export function parseDotEnv(text) {
   const env = {};
   for (const rawLine of text.split('\n')) {
     const line = rawLine.trim();
@@ -19,4 +19,8 @@ export async function loadDotEnv(path) {
     env[key] = value;
   }
   return env;
+}
+
+export async function loadDotEnv(path) {
+  return parseDotEnv(await readFile(path, 'utf8'));
 }

@@ -11,6 +11,7 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { useForceLayout, type ForceConfig, type ForceLink, type ForceNode } from './useForceLayout.js';
 import { usePanZoom } from './usePanZoom.js';
 import ZoomControls from './ZoomControls.js';
+import { linkKeys } from './linkKeys.js';
 import s from './NetworkGraph.module.css';
 
 export interface NetworkGraphProps<N extends ForceNode, L extends ForceLink<N>> {
@@ -185,6 +186,7 @@ export default function NetworkGraph<N extends ForceNode, L extends ForceLink<N>
 
   const simLinks = simLinksRef.current;
   const simNodes = simNodesRef.current;
+  const edgeKeys = linkKeys(simLinks);
 
   // Floating annotation anchored to a node, tracking sim + viewport.
   let annotation: ReactNode = null;
@@ -217,16 +219,15 @@ export default function NetworkGraph<N extends ForceNode, L extends ForceLink<N>
         <g
           transform={`translate(${panZoom.transform.tx},${panZoom.transform.ty}) scale(${panZoom.transform.scale})`}
         >
-          {simLinks.map((l) => {
+          {simLinks.map((l, i) => {
             const source = l.source as N;
             const target = l.target as N;
             if (source.x == null || target.x == null) return null;
             const label = edgeLabel(l);
             const mx = ((source.x ?? 0) + (target.x ?? 0)) / 2;
             const my = ((source.y ?? 0) + (target.y ?? 0)) / 2;
-            const key = `${source.id}>${target.id}`;
             return (
-              <g key={key}>
+              <g key={edgeKeys[i]}>
                 <line
                   x1={source.x}
                   y1={source.y}

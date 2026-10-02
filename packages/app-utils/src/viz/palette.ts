@@ -32,3 +32,31 @@ export const CHART_INK = {
 export function seriesColor(index: number): string {
   return SERIES_COLORS[Math.min(index, SERIES_COLORS.length - 1)];
 }
+
+/**
+ * Deterministic identity hue (0..359) for an entity id: a 31-multiplier
+ * string hash, so the same id gets the same hue in every view and every
+ * session with no lookup table to persist.
+ */
+export function entityHue(id: string): number {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) | 0;
+  return Math.abs(hash) % 360;
+}
+
+/**
+ * Identity colour for an entity (a service, host, pipeline…) —
+ * `hsl(<entityHue(id)>, 60%, <lightness>%)`. Pass a lower `lightness` for
+ * shaded sides or shadows of the same entity.
+ *
+ * Identity is not health. A waterfall needs a call chain to stay followable
+ * across hops (frontend → checkout → payment); colouring by health collapses
+ * every bar to green/red and loses that. Scanning views add health as a
+ * second channel (a row tint, a node fill with an identity ring) rather than
+ * replacing identity. And unlike SERIES_COLORS this is unbounded and
+ * order-independent: the slot palette is for ≤8 series in one chart, this
+ * is for "the same entity looks the same everywhere".
+ */
+export function entityColor(id: string, lightness = 50): string {
+  return `hsl(${entityHue(id)}, 60%, ${lightness}%)`;
+}

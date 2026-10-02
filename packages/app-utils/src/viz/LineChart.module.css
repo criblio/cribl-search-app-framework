@@ -1,3 +1,9 @@
+/*
+ * Shared chart frame for LineChart and StackedColumnChart (wrapper, legend,
+ * tooltip, empty/error states), so sibling chart panels match. Both live in
+ * the ./viz entry, so sharing it never crosses an entry-point boundary.
+ * Class names compile to criblio-au-viz-line-chart__* — keep them stable.
+ */
 .wrap {
   position: relative;
   background: var(--cds-color-bg);

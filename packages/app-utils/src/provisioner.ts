@@ -24,7 +24,7 @@
  * The node client uses an explicit Bearer token from OAuth client
  * credentials (see `getBearerToken`).
  */
-import { getBearerToken, type OAuthConfig } from './auth.js';
+import { getCachedBearerToken, type OAuthConfig } from './auth.js';
 import {
   ProvisionPlanError,
   validateProvisionPlan,
@@ -678,10 +678,11 @@ export function createBrowserHttpClient(): HttpClient {
 
 /** Factory for the node-side HTTP client used by `npm run provision`
  * and other deploy-time scripts. Performs the OAuth client-credentials
- * exchange via `getBearerToken` and returns a client that hits the
+ * exchange via `getCachedBearerToken` (so a test suite creating one
+ * client per call reuses one token) and returns a client that hits the
  * `/api/v1` surface of the configured Cribl Cloud workspace. */
 export async function createNodeHttpClient(config: OAuthConfig): Promise<HttpClient> {
-  const token = await getBearerToken(config);
+  const token = await getCachedBearerToken(config);
   const apiBase = config.baseUrl.replace(/\/$/, '') + '/api/v1';
   const headers = {
     authorization: `Bearer ${token}`,
