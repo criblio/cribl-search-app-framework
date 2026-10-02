@@ -356,6 +356,67 @@ Every failure these exist for reported success in every API layer.
 - `datasetPath(id, group?) / rulesetPath(group?)` — API path
   helpers (default group is `'default_search'`)
 
+**Metrics backfill** (`@criblio/app-utils/metrics-backfill`)
+
+- `runMetricsBackfill(emitters, deps, { horizonSec, nowSec, signal?, onProgress?, minChunkSeconds? })`
+  — re-run each `export to metrics` emitter over the history its family
+  lacks. Coverage is read from the metrics store (earliest sample per
+  family), so only the gap `[horizon, earliestCovered)` is filled, newest
+  window first (resumable; adding a family backfills only that family).
+  Fixed 6h windows by default (`emitter.windowSeconds`, or
+  `deps.planWindows` + `planDensityWindows` for per-event emitters).
+- The store is not idempotent, so: probe once per emitter, never per window
+  (a window's top edge IS the first covered bin, so a per-window probe
+  skips it — APM got 6h holes); halve-and-retry a window that drops events,
+  newer half first; stop an emitter whose export drops 100% (a rejected
+  query such as `invalid_type`, which splitting cannot fix).
+- `runMetricsExport(http, query, earliestMs, latestMs)` and
+  `readExportStats(rows)` read `eventsOut`/`eventsDropped`/`dropReasons`
+  from the export's own row — a `completed` job can drop every event.
+  `createMetricsCoverageProbe()` is the matching `earliestCoveredSec`
+  (histograms probe via `histogram_quantile`; a bare `count()` of one is
+  empty).
+
+```ts
+const result = await runMetricsBackfill(emitters, {
+  runExport: (q, e, l) => runMetricsExport(http, q, e, l),
+  earliestCoveredSec: createMetricsCoverageProbe(),
+}, { horizonSec: 86_400, nowSec: Date.now() / 1000, onProgress, signal });
+```
+
+**Generated events** (`@criblio/app-utils/generated-events`)
+
+- Write app events with `| export tee=true to search "<dataset>"`
+  (`exportToSearchClause(dataset)`); `| send group="search"` silently
+  stopped persisting.
+- Read the datatype with `STORED_DATATYPE_EXPR`
+  (`coalesce(tostring(data_datatype), tostring(datatype))`) — `send` rows
+  stored it as `data_datatype`. `storedDatatypePredicate(types)`,
+  `eventIdExpr(fallbackFields)` for a stable dedupe id over legacy rows.
+- `defineGeneratedEvents({ datatypes, schemaVersion, canaryProducer, canaryFields? })`
+  binds an app's datatypes into `predicate`, `canarySend`, `canaryRead`,
+  `canaryVerdict`; `runGeneratedEventCanary(events, run, { dataset })`
+  proves the write→read round trip after provisioning.
+
+```ts
+const events = defineGeneratedEvents({ datatypes: ['myapp_alert'], schemaVersion: 1, canaryProducer: 'myapp_canary' });
+const verdict = await runGeneratedEventCanary(events, runQuery, { dataset: 'main' });
+```
+
+**Alert state machine** (`@criblio/app-utils/alert-state`)
+
+- `nextAlertState({ prevStatus, isBad, newBad, newGood }, { fireAfter, clearAfter })`
+  → `{ status, transitionedTo, fireCountDelta }`; ok → pending → firing →
+  resolving → ok, plus pending → ok and resolving → firing.
+- `alertStateKql(opts)` / `alertCaseKql(opts)` / `alertTransitionKql(opts)`
+  emit the same machine as KQL for the scheduled evaluator. Both come from
+  one arm table, and the tests run the emitted KQL against the TS for every
+  transition, so the UI and the evaluator cannot drift.
+
+```ts
+const kql = `${evaluatorRows}\n${alertStateKql({ fireAfter: 2, clearAfter: 3 })}\n${exportToSearchClause(ds)}`;
+```
+
 **Styles**
 
 - `styles/tokens.css` — Cribl Design System custom properties
