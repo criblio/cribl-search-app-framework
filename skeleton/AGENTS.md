@@ -420,6 +420,28 @@ Unless the user specifies otherwise, use the Capra design system for all UI code
 - Don't write CSS selectors that depend on Capra component internals, classes, or HTML structure.
 <!-- @cribl/apps:managed:end -->
 
+# This app's structure
+
+Built to the Cribl App blueprint: the default view reads precomputed results,
+every panel tells loading, empty, stale and failed apart, nothing hardcodes a
+dataset, and one configuration page sets the app up. The skeleton ships the
+shell that shape needs; add pages, queries and scheduled searches into it.
+
+| Path | What it is |
+| --- | --- |
+| `src/main.tsx` | Capra styles, root `ResilienceBoundary`, `DatasetProvider defaultDataset={DEFAULT_SETTINGS.dataset}` |
+| `src/App.tsx` | `BrowserRouter basename={window.CRIBL_BASE_PATH}`, Capra `RouterProvider` bridge, a `ResilienceBoundary` per route, catch-all route |
+| `src/routes/paths.ts` | Every shared in-app path. Configuration is `/configuration`: the host shell intercepts any route containing "settings" |
+| `src/components/Sidebar.tsx` | Capra `VerticalNavigation`; items call `navigate()`, never `href` (an `href` reloads the iframe) |
+| `src/settings.ts` | `DEFAULT_SETTINGS` (`dataset`, `searchCadence`, feature switches) and load/save over the framework `/settings` helpers |
+| `src/routes/ConfigurationPage.tsx` | Setup status, dataset picker, cadence picker, `ProvisioningPanel`. Save is disabled when settings fail to load |
+| `src/provisioning/plan.ts` | `buildPlan(settings)` / `provisionerConfig(settings)`: the only place scheduled searches are defined. Starts empty |
+| `src/data/` | `dataset.ts` (`source()`, the dataset clause every query starts from); put query builders beside it |
+| `src/**/__tests__/` | Vitest (`npm test`); `vitest.config.ts` inlines `@criblio/app-utils` so its CSS imports load |
+| `tests/` | Live Playwright against a workspace (`npm run test:e2e`, needs `.env`) |
+| `tests-local/` | Playwright against `vite preview` with a mocked API (`npm run test:local`, no credentials) |
+
+
 
 # Cribl App Platform Developer Guide
 

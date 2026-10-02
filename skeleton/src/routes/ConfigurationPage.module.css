@@ -1,0 +1,35 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cds-space-lg);
+  max-width: 880px;
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cds-space-md);
+  padding: var(--cds-space-lg);
+  background: var(--cds-color-bg);
+  border: 1px solid var(--cds-color-border-subtle);
+  border-radius: var(--cds-radius-lg);
+}
+.statusList {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cds-space-sm);
+}
+.statusRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--cds-space-sm);
+}
+.mark {
+  width: 1.25em;
+  font-weight: var(--cds-font-weight-semibold);
+  text-align: center;
+}
+.statusRow[data-state='ready'] .mark { color: var(--cds-color-success); }
+.statusRow[data-state='action'] .mark { color: var(--cds-color-warning); }
+.statusRow[data-state='failed'] .mark { color: var(--cds-color-danger); }

@@ -19,6 +19,11 @@ Local dev via `npm run dev`; package for upload with
    downloads, no popups, CSP), scheduled search patterns,
    provisioning, and UI patterns.
 
+The skeleton is built to the Cribl App blueprint (fast default views from
+scheduled searches, honest panel states, no hardcoded dataset, one
+`/configuration` page). "This app's structure" in `AGENTS.md` maps where each
+piece lives; build into that shape rather than around it.
+
 When building a feature, check `AGENTS.md` for the API surface
 and `docs/skill.md` for known pitfalls. If you have the Cribl
 MCP server running (see below), use it to inspect live APIs and
@@ -87,8 +92,9 @@ tag, in a clean working tree:
 
 ```bash
 npm run lint          # must pass — what the workflow gates on
-npm test              # unit tests
-npx tsc --noEmit      # type-check
+npm test              # unit tests (src/**/__tests__/)
+npx tsc -b            # type-check (solution-style root: --noEmit checks nothing)
+npm run test:local    # mocked-API Playwright resilience specs (tests-local/)
 npm run package       # full build + tgz produced
 ```
 
@@ -117,8 +123,9 @@ version on the first step — keep them in sync.
 - **`foldkeys`** operator exists but the output `key`/`value`
   columns don't support type filtering. Use `_raw` regex parsing
   for field-name discovery instead.
-- **Route conflicts**: avoid using `/settings` in pack routes —
-  the Cribl host shell intercepts paths containing "settings".
+- **Route conflicts**: never put "settings" in a route — the Cribl
+  host shell intercepts it. The settings page is `/configuration`
+  (`src/routes/paths.ts`).
 - **`summarize → summarize max(iff(...))`** crashes on real data
   (works on synthetic rows, fails on rows from a prior
   summarize). Split into separate searches joined via lookups.
