@@ -123,8 +123,13 @@ expect(validateProvisionPlan(getPlan(), { prefix: 'myapp__', seedLookups: SEEDS 
 ```
 
 App-specific rules go in `ProvisionerConfig.validate`; they add to the
-built-in rules. Disable a single misfiring rule with
-`guard: { disableRules: ['…'] }` rather than `guard: false`.
+built-in rules. Give each its own `rule` name (`'keep-last-n'`, not a
+borrowed built-in such as `'invalid-name'`) — `ProvisionProblem.rule`
+accepts any string and the name is what the panel and
+`ProvisionPlanError` show. Disable a single misfiring built-in rule with
+`guard: { disableRules: ['…'] }` rather than `guard: false`;
+`disableRules` names built-ins only, so switch an app rule off in your
+own `validate`.
 
 ### Panel caching
 Scheduled searches write to `$vt_results`. Read all panels in one
@@ -173,6 +178,30 @@ An alert arm that only emits rows while bad never sees a good
 evaluation and so never resolves: emit a row for every evaluated key.
 Prove the event write path after provisioning with
 `runGeneratedEventCanary`.
+
+### Metrics backfill coverage
+`runMetricsBackfill` fills only the history a family lacks, and
+`createMetricsCoverageProbe` decides what it lacks with `count(metric)`:
+covered wherever ANY series of the family exists. That is wrong for
+percentile gauges that share one name and differ by a `quantile` label —
+a covered p95 hides an empty p99, and the backfill skips it. Declare the
+series the family must have:
+
+```ts
+const latency: MetricsBackfillEmitter = {
+  id: 'latency_pctl', metricName: 'myapp_latency_ms', query: LATENCY_EXPORT, kind: 'gauge',
+  coverageSplit: { label: 'quantile', values: ['0.5', '0.95', '0.99'] },
+};
+```
+
+The probe then asks `count by (quantile) (metric)` and coverage starts at
+the LATEST of the values' earliest samples (`splitCoverageSec`): the gap
+to fill is wherever any required series is missing, so the youngest
+series sets its top. A listed value with no sample at all means
+uncovered. List the values; a series that was never written cannot be
+discovered. The emitter re-emits every series over the gap, so the older
+series are written twice there — fine for a gauge, double-counting for a
+counter; split gauge-like families only.
 
 ### Cadence
 Make scheduled search cadence configurable via a Settings page
@@ -245,6 +274,12 @@ belong in `createStore(initial)` from `@criblio/app-utils/store`, read
 in components with `useStore(store)`. Give every flag an explicit
 default that is safe when KV is unreachable — normally OFF, so a new
 feature ships dark.
+
+A fallback must not hide the failure. `<DatasetProvider>` keeps the app
+default when the saved dataset cannot be read, and reports the KV error
+through `onError` and `useDatasetLoadError()` (from
+`@criblio/app-utils/dataset`) — show it on the Settings page, or the
+user's saved choice is silently not the one in use.
 
 ### Graph stability
 When using d3-force or similar layout engines, compute a topology

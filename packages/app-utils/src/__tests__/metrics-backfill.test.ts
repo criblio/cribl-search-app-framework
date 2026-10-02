@@ -9,6 +9,7 @@ import {
   readExportStats,
   runMetricsBackfill,
   runMetricsExport,
+  splitCoverageSec,
   type BackfillWindow,
   type ExportStats,
   type MetricsBackfillDeps,
@@ -264,5 +265,65 @@ describe('coverage probe', () => {
     expect(calls[0].query).toContain('histogram_quantile');
     await probe(requests, 1_000_000, 2_000_000);
     expect(calls[1]).toMatchObject({ earliest: 1_000_000, query: 'count(app_requests_total)' });
+  });
+});
+
+describe('coverage split by label value', () => {
+  const pctl: MetricsBackfillEmitter = {
+    id: 'pctl',
+    metricName: 'app_latency_pctl_ms',
+    query: 'Q_PCTL',
+    kind: 'gauge',
+    coverageSplit: { label: 'quantile', values: ['0.95', '0.99'] },
+  };
+  const series = (quantile: string, ts: number[]) => ({ labels: { quantile }, points: ts.map((t) => ({ t, v: 1 })) });
+
+  it('splits the probe query by the label, for gauges and histograms', () => {
+    expect(coverageProbeQuery('m', 'gauge', 'quantile')).toBe('count by (quantile) (m)');
+    expect(coverageProbeQuery('m_ms', 'histogram', 'route')).toBe(
+      'histogram_quantile(0.5, sum(rate(m_ms[5m])) by (le, route))',
+    );
+    expect(() => coverageProbeQuery('m', undefined, 'q) or vector(1')).toThrow(RangeError);
+  });
+
+  it('starts coverage at the LATEST series start, so a covered p95 cannot hide a younger p99', () => {
+    expect(splitCoverageSec([series('0.95', [600, 660]), series('0.99', [1800, 1860])], pctl.coverageSplit!)).toBe(1800);
+  });
+
+  it('treats a required value with no samples as uncovered', () => {
+    expect(splitCoverageSec([series('0.95', [600])], pctl.coverageSplit!)).toBeNull();
+    // NaN-only is no sample either; unrequired values are ignored.
+    expect(splitCoverageSec([
+      series('0.95', [600]),
+      { labels: { quantile: '0.99' }, points: [{ t: 300, v: Number.NaN }] },
+      series('0.5', [60]),
+    ], pctl.coverageSplit!)).toBeNull();
+  });
+
+  it('the probe reads per-quantile series and the backfill fills the p99 gap', async () => {
+    const calls: string[] = [];
+    const transport = vi.fn(async (query: string) => {
+      calls.push(query);
+      return [
+        '{"isFinished":true,"job":{"status":"completed"}}',
+        `{"_kind":"sample","_time":${TO - 6 * H},"_value":3,"quantile":"0.95"}`,
+        `{"_kind":"sample","_time":${TO - H},"_value":1,"quantile":"0.99"}`,
+      ].join('\n');
+    });
+    const probe = createMetricsCoverageProbe({ transport });
+    await expect(probe(pctl, (TO - 6 * H) * 1000, TO * 1000)).resolves.toBe(TO - H);
+    expect(calls[0]).toBe('count by (quantile) (app_latency_pctl_ms)');
+
+    const windows: BackfillWindow[] = [];
+    const result = await runMetricsBackfill([pctl], {
+      earliestCoveredSec: probe,
+      runExport: async (_q, e, l) => {
+        windows.push({ earliestSec: e / 1000, latestSec: l / 1000 });
+        return clean();
+      },
+    }, { horizonSec: 6 * H, nowSec: NOW });
+    // Unsplit, count(metric) would see the p95 sample at the horizon and skip.
+    expect(result.emitters[0].status).toBe('filled');
+    expect(result.emitters[0].gap).toEqual({ earliestSec: TO - 6 * H, latestSec: TO - H });
   });
 });

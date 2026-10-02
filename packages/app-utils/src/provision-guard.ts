@@ -27,11 +27,22 @@ export type ProvisionRule =
   | 'duplicate-id'
   | 'id-prefix';
 
+/**
+ * The rule a problem names: a built-in `ProvisionRule`, or any app rule
+ * name returned by `ProvisionerConfig.validate` (e.g. `'keep-last-n'`).
+ * `string & {}` keeps editor completion for the built-in names while
+ * admitting app names, so an app rule never has to borrow a built-in one
+ * — a borrowed name mislabels the problem in the panel and the error, and
+ * `disableRules` for that built-in would silently drop the app rule too.
+ * Built-in validators only ever produce `ProvisionRule`.
+ */
+export type ProvisionProblemRule = ProvisionRule | (string & {});
+
 /** One rule violation. `searchId` is the saved-search id, or
  * `seed:<lookup>` for a seed-lookup query. */
 export interface ProvisionProblem {
   searchId: string;
-  rule: ProvisionRule;
+  rule: ProvisionProblemRule;
   message: string;
 }
 
@@ -48,8 +59,9 @@ export interface ValidateProvisionPlanOptions {
   prefix?: string;
   /** Seed-lookup queries to validate alongside the searches. */
   seedLookups?: SeedLookup[];
-  /** Rules to skip — an escape hatch for a heuristic false positive,
-   * narrower than turning the whole guard off. */
+  /** Built-in rules to skip — an escape hatch for a heuristic false
+   * positive, narrower than turning the whole guard off. Typed to the
+   * built-ins: an app rule is switched off in the app's own `validate`. */
   disableRules?: ProvisionRule[];
 }
 
@@ -199,7 +211,7 @@ export function validateProvisionPlan(
     }
     problems.push(...validateProvisionQuery(id, seed.seedQuery));
   }
-  const disabled = new Set(opts.disableRules ?? []);
+  const disabled = new Set<string>(opts.disableRules ?? []);
   const kept = problems.filter((p) => !disabled.has(p.rule));
   return { ok: kept.length === 0, problems: kept };
 }

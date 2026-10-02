@@ -1,0 +1,16 @@
+{
+  // Compiles a strict consumer against the PUBLISHED exports map: every
+  // import below goes through package.json `exports` by package name
+  // (self-reference), so a subpath with no `types` condition fails here
+  // with TS7016 exactly as it does in an app.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": false,
+    "types": ["node"]
+  },
+  "files": ["consumer.ts"]
+}

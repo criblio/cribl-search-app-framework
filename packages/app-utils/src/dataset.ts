@@ -56,3 +56,42 @@ export function subscribeDataset(fn: () => void): () => void {
 export function useDataset(): string {
   return useSyncExternalStore(subscribeDataset, getCurrentDataset, getCurrentDataset);
 }
+
+/**
+ * Why the saved dataset could not be loaded, or null. `<DatasetProvider>`
+ * keeps its fallback (the app default stays in the store) when the KV read
+ * fails, which used to be silent: a broken settings store looked exactly
+ * like "nothing saved". It records the failure here — and clears it on the
+ * next successful load — so a Settings page or banner can say so.
+ */
+const loadErrorStore = createStore<Error | null>(null);
+
+/** The last saved-dataset load failure, or null once a load succeeds. */
+export function getDatasetLoadError(): Error | null {
+  return loadErrorStore.get();
+}
+
+/** Record (or clear, with null) a saved-dataset load failure. Called by
+ * `<DatasetProvider>`; an app that loads the dataset itself may call it too. */
+export function setDatasetLoadError(err: Error | null): void {
+  loadErrorStore.set(err);
+}
+
+/** Subscribe to load-error changes. Returns an unsubscribe function. */
+export function subscribeDatasetLoadError(fn: () => void): () => void {
+  return loadErrorStore.subscribe(fn);
+}
+
+/**
+ * React hook: the saved-dataset load failure, or null. The dataset itself
+ * still falls back to the app default; this is how a page tells the user
+ * their saved choice is not the one in use.
+ *
+ * ```tsx
+ * const loadError = useDatasetLoadError();
+ * if (loadError) return <Banner kind="warning">Saved dataset unavailable: {loadError.message}</Banner>;
+ * ```
+ */
+export function useDatasetLoadError(): Error | null {
+  return useSyncExternalStore(subscribeDatasetLoadError, getDatasetLoadError, getDatasetLoadError);
+}

@@ -3,6 +3,7 @@
  * component so it can be tested without a DOM. Internal: not in the
  * package's `exports` map.
  */
+import { setCurrentDataset, setDatasetLoadError } from './dataset.js';
 import { loadSettings } from './settings.js';
 
 /**
@@ -22,4 +23,46 @@ export async function loadSavedDataset(appDefault?: string): Promise<string | un
   const settings = await loadSettings(fallback ? { dataset: fallback } : undefined);
   const ds = settings?.dataset;
   return typeof ds === 'string' && ds.trim() ? ds.trim() : undefined;
+}
+
+/** The `console.warn` text for a load failure nobody else reports. */
+export const DATASET_LOAD_WARNING = 'DatasetProvider: could not load the saved dataset; using the app default.';
+
+export interface SyncSavedDatasetOptions {
+  /** Checked after the read settles; true drops the result (unmounted). */
+  isCancelled?: () => boolean;
+  /** Called with the KV failure. Without it the failure is logged with
+   * `console.warn`, so it is never silent. */
+  onError?: (err: Error) => void;
+}
+
+/**
+ * `<DatasetProvider>`'s mount effect: load the saved dataset and push it
+ * into the store. A KV failure leaves the store alone (the app default
+ * stands, as before) but is recorded in the load-error store
+ * (`useDatasetLoadError`) and reported through `onError`; a later success
+ * clears it. Never rejects.
+ */
+export async function syncSavedDataset(appDefault?: string, opts: SyncSavedDatasetOptions = {}): Promise<void> {
+  let ds: string | undefined;
+  try {
+    ds = await loadSavedDataset(appDefault);
+  } catch (raw) {
+    if (opts.isCancelled?.()) return;
+    const err = raw instanceof Error ? raw : new Error(String(raw));
+    setDatasetLoadError(err);
+    if (opts.onError) {
+      try {
+        opts.onError(err);
+      } catch {
+        /* a throwing reporter must not become an unhandled rejection */
+      }
+    } else {
+      console.warn(DATASET_LOAD_WARNING, err);
+    }
+    return;
+  }
+  if (opts.isCancelled?.()) return;
+  setDatasetLoadError(null);
+  if (ds) setCurrentDataset(ds);
 }

@@ -34,7 +34,7 @@
  * the deploy script run the identical algorithm.
  */
 
-import { queryRange, type MetricsTransport } from './metrics.js';
+import { queryRange, type MetricSeries, type MetricsTransport } from './metrics.js';
 import { runSearchJob, type SearchHttpClient } from './search-job.js';
 
 /** Fixed window for a family with no `windowSeconds` of its own. */
@@ -69,6 +69,36 @@ export interface MetricsBackfillEmitter {
   kind?: string;
   /** Fixed window size. Default {@link DEFAULT_BACKFILL_WINDOW_SECONDS}. */
   windowSeconds?: number;
+  /**
+   * Probe coverage per label value instead of per family. Without it the
+   * probe asks `count(metric)`, which has a sample wherever ANY series of
+   * the family exists — so for percentile gauges sharing one name with a
+   * `quantile` label, a covered p95 hides an empty p99 and the backfill
+   * skips it. See {@link CoverageSplit}.
+   */
+  coverageSplit?: CoverageSplit;
+}
+
+/**
+ * The series a family must have, all of them, for a minute to count as
+ * covered: one per value of `label`. Coverage starts at the LATEST of the
+ * values' earliest samples, so the gap reaches up to where the last
+ * required series begins — the gap to fill is wherever ANY of them is
+ * missing. A value with no sample at all means the family is uncovered
+ * (`null`), which is why the values are listed rather than discovered: a
+ * series that was never written returns nothing to discover.
+ *
+ * The emitter re-emits every series over that gap, so the series that were
+ * already covered are written a second time between their own earliest
+ * sample and the gap's top. That is harmless for a gauge re-written with
+ * the same value at the same timestamp, and double-counts a counter — use
+ * a split for gauge-like families (percentiles), not counters.
+ */
+export interface CoverageSplit {
+  /** Label distinguishing the required series, e.g. `quantile`. */
+  label: string;
+  /** Every value the family must carry, e.g. `['0.5', '0.95', '0.99']`. */
+  values: readonly string[];
 }
 
 export interface MetricsBackfillDeps<E extends MetricsBackfillEmitter = MetricsBackfillEmitter> {
@@ -264,21 +294,58 @@ export async function runMetricsExport(
 }
 
 const METRIC_NAME = /^[A-Za-z_:][A-Za-z0-9_:]*$/;
+const LABEL_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
  * PromQL that yields a sample wherever a family has data. Histograms answer
  * only through `histogram_quantile(… by (le))` — a bare `count()` of a
  * histogram returns nothing, which made APM re-backfill a covered family.
+ * With `splitBy`, one series per value of that label
+ * (`count by (quantile) (m)`), for {@link CoverageSplit}.
  */
-export function coverageProbeQuery(metricName: string, kind?: string): string {
+export function coverageProbeQuery(metricName: string, kind?: string, splitBy?: string): string {
   if (!METRIC_NAME.test(metricName)) throw new RangeError(`not a metric name: ${metricName}`);
-  return kind === 'histogram'
-    ? `histogram_quantile(0.5, sum(rate(${metricName}[5m])) by (le))`
-    : `count(${metricName})`;
+  if (splitBy !== undefined && !LABEL_NAME.test(splitBy)) throw new RangeError(`not a label name: ${splitBy}`);
+  if (kind === 'histogram') {
+    return `histogram_quantile(0.5, sum(rate(${metricName}[5m])) by (le${splitBy ? `, ${splitBy}` : ''}))`;
+  }
+  return splitBy ? `count by (${splitBy}) (${metricName})` : `count(${metricName})`;
+}
+
+/** Earliest finite sample time in `series`, or null. Finite, not positive:
+ * a quantile or a count can be 0. */
+function earliestFinite(series: readonly MetricSeries[]): number | null {
+  let min: number | null = null;
+  for (const s of series) {
+    for (const p of s.points) {
+      if (Number.isFinite(p.v) && (min === null || p.t < min)) min = p.t;
+    }
+  }
+  return min;
+}
+
+/**
+ * Coverage start across a split: each required value's earliest sample,
+ * then the LATEST of those (null if any value has none). Taking the
+ * earliest instead would let one long-covered series hide another's gap —
+ * the very bug the split exists to fix. Series whose label is not a
+ * required value are ignored.
+ */
+export function splitCoverageSec(series: readonly MetricSeries[], split: CoverageSplit): number | null {
+  if (split.values.length === 0) return earliestFinite(series);
+  let latest: number | null = null;
+  for (const value of new Set(split.values)) {
+    const first = earliestFinite(series.filter((s) => s.labels[split.label] === value));
+    if (first === null) return null;
+    if (latest === null || first > latest) latest = first;
+  }
+  return latest;
 }
 
 export interface MetricsCoverageProbeOptions<E extends MetricsBackfillEmitter> {
-  /** Probe expression per emitter. Default {@link coverageProbeQuery}. */
+  /** Probe expression per emitter. Default {@link coverageProbeQuery}. For
+   * an emitter with `coverageSplit`, the expression must keep the split
+   * label on its result series (e.g. `… by (quantile)`). */
   query?(emitter: E): string;
   /** Range-query step. Default 60 — the emitters' bin, so the first covered
    * sample lands on the first written minute rather than up to a step later. */
@@ -292,6 +359,8 @@ export interface MetricsCoverageProbeOptions<E extends MetricsBackfillEmitter> {
  * Histogram probes start 5 minutes early so the first step's `rate[5m]`
  * has samples (else a short gap reads uncovered and is re-emitted).
  * Coverage is a FINITE sample, not a positive one: a quantile can be 0.
+ * An emitter with `coverageSplit` is probed per label value and covered
+ * from the latest of those values' earliest samples ({@link splitCoverageSec}).
  */
 export function createMetricsCoverageProbe<E extends MetricsBackfillEmitter>(
   opts: MetricsCoverageProbeOptions<E> = {},
@@ -299,20 +368,16 @@ export function createMetricsCoverageProbe<E extends MetricsBackfillEmitter>(
   const step = opts.stepSec ?? 60;
   return async (emitter, earliestMs, latestMs) => {
     const startMs = emitter.kind === 'histogram' ? earliestMs - 300_000 : earliestMs;
-    const series = await queryRange(opts.query?.(emitter) ?? coverageProbeQuery(emitter.metricName, emitter.kind), {
+    const split = emitter.coverageSplit;
+    const query = opts.query?.(emitter) ?? coverageProbeQuery(emitter.metricName, emitter.kind, split?.label);
+    const series = await queryRange(query, {
       earliest: startMs,
       latest: latestMs,
       step,
       dataset: opts.dataset,
       transport: opts.transport,
     });
-    let min: number | null = null;
-    for (const s of series) {
-      for (const p of s.points) {
-        if (Number.isFinite(p.v) && (min === null || p.t < min)) min = p.t;
-      }
-    }
-    return min;
+    return split ? splitCoverageSec(series, split) : earliestFinite(series);
   };
 }
 

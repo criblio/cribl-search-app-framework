@@ -74,6 +74,7 @@ export {
   ProvisionPlanError,
   SAVED_SEARCH_NAME_PATTERN,
   type ProvisionRule,
+  type ProvisionProblemRule,
   type ProvisionProblem,
   type ProvisionValidation,
   type ValidateProvisionPlanOptions,
@@ -127,8 +128,12 @@ export {
   setCurrentDataset,
   subscribeDataset,
   useDataset,
+  getDatasetLoadError,
+  setDatasetLoadError,
+  subscribeDatasetLoadError,
+  useDatasetLoadError,
 } from './dataset.js';
-export { DatasetProvider } from './DatasetProvider.js';
+export { DatasetProvider, type DatasetProviderProps } from './DatasetProvider.js';
 export {
   Banner,
   useProvisioningBanners,
@@ -223,7 +228,9 @@ export {
   readExportStats,
   runMetricsBackfill,
   runMetricsExport,
+  splitCoverageSec,
   type BackfillWindow,
+  type CoverageSplit,
   type EmitterBackfillResult,
   type ExportStats,
   type MetricsBackfillDeps,

@@ -147,7 +147,7 @@ describe('opting out and extending', () => {
       validate: (plan) =>
         plan.filter((s) => s.schedule.keepLastN < 3).map((s) => ({
           searchId: s.id,
-          rule: 'invalid-name' as const,
+          rule: 'keep-last-n',
           message: 'app rule: keepLastN must be >= 3',
         })),
     };
@@ -169,6 +169,50 @@ describe('opting out and extending', () => {
       validate: () => ({ ok: false, problems: [{ searchId: 'x', rule: 'duplicate-id', message: 'm' }] }),
     });
     expect(v.ok).toBe(false);
+  });
+});
+
+describe('app rule names', () => {
+  // An app rule used to have to borrow a built-in name ('invalid-name'),
+  // which mislabelled it in the panel and the error. Its own name must
+  // survive validateProvisionerPlan, ProvisionPlanError and InvalidPlanView.
+  const config: ProvisionerConfig = {
+    prefix: 'app__',
+    plan: [search('app__ok')],
+    guard: { disableRules: ['invalid-name'] },
+    validate: (plan) => plan.map((s) => ({ searchId: s.id, rule: 'keep-last-n', message: 'keepLastN must be >= 3' })),
+  };
+
+  it('round-trips into ProvisionPlanError.problems and its message', async () => {
+    const { http, writes } = fakeHttp();
+    const err = await reconcile(http, config).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ProvisionPlanError);
+    expect((err as ProvisionPlanError).problems).toEqual([
+      { searchId: 'app__ok', rule: 'keep-last-n', message: 'keepLastN must be >= 3' },
+    ]);
+    expect((err as ProvisionPlanError).message).toContain('app__ok [keep-last-n]');
+    expect(writes()).toEqual([]);
+  });
+
+  it('is not dropped by disabling a built-in rule', () => {
+    expect(validateProvisionerPlan(config).problems.map((p) => p.rule)).toEqual(['keep-last-n']);
+  });
+
+  it('keeps disableRules typed to the built-in rules', () => {
+    // @ts-expect-error — disableRules names built-ins only; an app rule is off in its own validate
+    const guard: ProvisionerConfig['guard'] = { disableRules: ['keep-last-n'] };
+    expect(guard).toBeTruthy();
+  });
+
+  it('renders in InvalidPlanView', () => {
+    const html = renderToString(
+      createElement(InvalidPlanView, {
+        problems: validateProvisionerPlan(config).problems,
+        onDismiss: () => undefined,
+      }),
+    );
+    expect(html).toContain('keep-last-n');
+    expect(html).toContain('app__ok');
   });
 });
 
