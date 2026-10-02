@@ -25,6 +25,10 @@
  * optional `onError` prop, and logged with `console.warn` when there is no
  * `onError`. The next successful load clears it.
  *
+ * The saved value is the `dataset` field at KV key `settings`; an app
+ * whose settings live elsewhere passes `settingsKey`, or `loadDataset` for
+ * a read of its own.
+ *
  * Most apps will pair this with `<Outlet key={dataset} />` in their
  * shell so route subtrees fully remount when the dataset changes —
  * see ../README.md for the pattern.
@@ -41,14 +45,27 @@ export interface DatasetProviderProps {
    * malformed). The app default stays in use either way. Not a dependency
    * of the load: an inline arrow does not re-trigger it. */
   onError?: (err: Error) => void;
+  /** KV key of the app's settings object, for an app whose settings do
+   * not live at `settings`. Default `'settings'`. */
+  settingsKey?: string;
+  /** Custom saved-dataset read; wins over `settingsKey`. Resolve
+   * `undefined` for nothing saved, reject when the read failed. Like
+   * `onError`, not a dependency of the load: an inline arrow does not
+   * re-trigger it. */
+  loadDataset?: () => Promise<string | undefined | null>;
   children: ReactNode;
 }
 
-export function DatasetProvider({ defaultDataset, onError, children }: DatasetProviderProps) {
+export function DatasetProvider({ defaultDataset, onError, settingsKey, loadDataset, children }: DatasetProviderProps) {
   const onErrorRef = useRef(onError);
   useEffect(() => {
     onErrorRef.current = onError;
   }, [onError]);
+  const loadDatasetRef = useRef(loadDataset);
+  useEffect(() => {
+    loadDatasetRef.current = loadDataset;
+  }, [loadDataset]);
+  const hasLoader = loadDataset !== undefined;
 
   // Render-time on purpose (see above): an effect is too late. Guarded on
   // an empty store, so it is idempotent across re-renders and StrictMode's
@@ -61,6 +78,8 @@ export function DatasetProvider({ defaultDataset, onError, children }: DatasetPr
     let cancelled = false;
     void syncSavedDataset(defaultDataset, {
       isCancelled: () => cancelled,
+      settingsKey,
+      loadDataset: hasLoader ? () => (loadDatasetRef.current ?? (async () => undefined))() : undefined,
       // Read through the ref at failure time, so the latest prop is used.
       onError: (err) => {
         const report = onErrorRef.current;
@@ -71,7 +90,7 @@ export function DatasetProvider({ defaultDataset, onError, children }: DatasetPr
     return () => {
       cancelled = true;
     };
-  }, [defaultDataset]);
+  }, [defaultDataset, settingsKey, hasLoader]);
 
   return <>{children}</>;
 }

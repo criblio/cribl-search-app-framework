@@ -82,6 +82,15 @@ describe('offsetCron composes and leaves what it cannot shift alone', () => {
     expect(offsetCron('4-59/5 * * * *', 1)).toBe('*/5 * * * *');
   });
 
+  it('is relative to its input, not idempotent (APM\'s copy returned 1-59/5 unchanged)', () => {
+    expect(offsetCron('1-59/5 * * * *', 2)).toBe('3-59/5 * * * *');
+    for (const src of ['*/5 * * * *', '*/10 * * * *', '2-59/15 * * * *']) {
+      for (const [a, b] of [[1, 1], [1, 2], [3, 4], [2, -1]] as const) {
+        expect(offsetCron(offsetCron(src, a), b)).toBe(offsetCron(src, a + b));
+      }
+    }
+  });
+
   it('every minute spelled */1 is unchanged', () => {
     expect(offsetCron('*/1 * * * *', 1)).toBe('*/1 * * * *');
   });

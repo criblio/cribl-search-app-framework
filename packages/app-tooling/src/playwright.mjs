@@ -34,6 +34,37 @@ export function appPathFor(appId) {
   return `/app-ui/${appId}/`;
 }
 
+const APP_PATH = /^(?:https?:\/\/[^/]+)?\/app-ui\/([^/?#]+)(?:[/?#].*)?$/;
+
+/**
+ * The app id in an app path: `/app-ui/<id>/` (a trailing deep path, query,
+ * or a full `https://host/app-ui/<id>/…` URL is accepted). Throws, naming
+ * the expected shape, for anything else — so an `APP_PATH` override in the
+ * environment needs no second variable for the id.
+ */
+export function appIdFromPath(appPath) {
+  const match = typeof appPath === 'string' ? APP_PATH.exec(appPath) : null;
+  if (!match) {
+    throw new Error(
+      `app path must look like /app-ui/<app-id>/ (got ${JSON.stringify(appPath)})`,
+    );
+  }
+  const appId = decodeURIComponent(match[1]);
+  assertAppId(appId);
+  return appId;
+}
+
+/** `appId` string, or `{ appId?, appPath? }` → `{ appId, appPath }`. */
+function resolveApp(target, fallbackPath) {
+  if (typeof target === 'string') {
+    return { appId: target, appPath: fallbackPath ?? appPathFor(target) };
+  }
+  const { appId, appPath } = target ?? {};
+  if (appId) return { appId, appPath: appPath ?? appPathFor(appId) };
+  if (appPath) return { appId: appIdFromPath(appPath), appPath };
+  throw new Error('pass an app id, or { appPath } (e.g. /app-ui/my-app/)');
+}
+
 /**
  * Merge a `.env` file into `process.env` without overriding values already
  * set (CI secrets win). A missing file is not an error. Synchronous so a
@@ -123,8 +154,8 @@ export function appFrameSelector(appId) {
  * FrameLocator rooted in the app's iframe. The top page is the workspace
  * shell; every in-app locator must go through this.
  */
-export function appFrame(page, appId) {
-  return page.frameLocator(appFrameSelector(appId)).first();
+export function appFrame(page, app) {
+  return page.frameLocator(appFrameSelector(resolveApp(app).appId)).first();
 }
 
 /**
@@ -156,8 +187,12 @@ export async function dismissHostAnnouncements(page, signatures = KNOWN_HOST_ANN
  * inside the frame. Waits for the iframe to attach (it is injected after
  * the shell's scripts run) and clears host announcements.
  */
-export async function gotoApp(page, appId, options = {}) {
-  const { appPath = appPathFor(appId), path = '/', timeoutMs = 30_000 } = options;
+export async function gotoApp(page, app, options = {}) {
+  // `gotoApp(page, { appPath, path?, timeoutMs? })` derives the id from the
+  // path; `gotoApp(page, appId, options?)` is the original form.
+  const opts = typeof app === 'string' ? options : { ...app, ...options };
+  const { appId, appPath } = resolveApp(typeof app === 'string' ? app : opts, opts.appPath);
+  const { path = '/', timeoutMs = 30_000 } = opts;
   const target = `${appPath.replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
   await page.goto(target, { waitUntil: 'domcontentloaded' });
   await page.locator(appFrameSelector(appId)).first().waitFor({ state: 'attached', timeout: timeoutMs });

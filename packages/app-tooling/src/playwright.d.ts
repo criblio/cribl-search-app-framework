@@ -14,6 +14,13 @@ export interface HostGlobalsOptions extends CriblCredentials {
   appPath?: string;
 }
 
+/** Identify the app by `appPath` alone (the id is parsed from it with
+ * `appIdFromPath`) or by `appId`. */
+export interface AppTarget {
+  appId?: string;
+  appPath?: string;
+}
+
 export interface GotoAppOptions {
   appPath?: string;
   /** In-app path. The shell ignores deep paths today; navigate inside the frame instead. */
@@ -32,15 +39,18 @@ export interface LoginSetupOptions {
 }
 
 export function appPathFor(appId: string): string;
+/** `/app-ui/<id>/` (or a full URL / deep path under it) → `<id>`; throws otherwise. */
+export function appIdFromPath(appPath: string): string;
 export function loadTestEnv(path?: string, env?: NodeJS.ProcessEnv): Record<string, string>;
 export function criblCredentialsFromEnv(env?: NodeJS.ProcessEnv): CriblCredentials;
 export function hostGlobalsInitScript(args: [basePath: string, apiUrl: string, token: string]): void;
 export function installCriblHostGlobals(page: Page, options: HostGlobalsOptions): Promise<void>;
 export function appFrameSelector(appId: string): string;
-export function appFrame(page: Page, appId: string): FrameLocator;
+export function appFrame(page: Page, app: string | AppTarget): FrameLocator;
 export const KNOWN_HOST_ANNOUNCEMENTS: RegExp[];
 export function dismissHostAnnouncements(page: Page, signatures?: RegExp[]): Promise<void>;
 export function gotoApp(page: Page, appId: string, options?: GotoAppOptions): Promise<FrameLocator>;
+export function gotoApp(page: Page, target: AppTarget & Omit<GotoAppOptions, 'appPath'>): Promise<FrameLocator>;
 export function loginSetup(page: Page, options: LoginSetupOptions): Promise<void>;
 export function runSearch(
   credentials: CriblCredentials,

@@ -1,4 +1,5 @@
-import { access, readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { access, readFile, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { loadDotEnv } from './dotenv.mjs';
 import { inspectPack } from './inspect.mjs';
@@ -239,7 +240,10 @@ export async function installUploadedPack({ baseUrl, token, source, pkg }) {
   }
 }
 
-/** Validate and install or upgrade one exact Cribl App candidate without force. */
+/** Validate and install or upgrade one exact Cribl App candidate without force.
+ * With `dryRun`, everything up to the first workspace write runs — build,
+ * inspect, token, read of the installed record — and the plan is returned
+ * instead of uploading. */
 export async function deployApp({
   root = process.cwd(),
   artifact,
@@ -247,6 +251,7 @@ export async function deployApp({
   proxiesManifest,
   requireNoPolicies = false,
   provision = true,
+  dryRun = false,
 } = {}) {
   if (requireEmptyProxies && proxiesManifest) {
     throw new Error('--require-empty-proxies and --proxies-manifest are mutually exclusive');
@@ -258,16 +263,35 @@ export async function deployApp({
     if (!env[key]) throw new Error(`${key} is not configured`);
   }
   const baseUrl = env.CRIBL_BASE_URL.replace(/\/$/, '');
-  const pkg = JSON.parse(await readFile(join(rootDir, 'package.json'), 'utf8'));
+  const packageJsonPath = join(rootDir, 'package.json');
+  let pkg = JSON.parse(await readFile(packageJsonPath, 'utf8'));
   let artifactPath;
+  let packageJsonBefore = null;
   if (artifact) {
     artifactPath = resolve(rootDir, artifact);
   } else {
     if (pkg.scripts?.verify) await runCommand('npm', ['run', 'verify'], rootDir);
+    const before = await readFile(packageJsonPath);
     await runCommand('npm', ['run', 'package'], rootDir);
+    // Re-read: `apps package` (the skeleton's packer) INCREMENTS
+    // package.json before packing. Naming the artifact from the version read
+    // above picked up the PREVIOUS run's tgz — a stale archive that then
+    // matched the installed version and was skipped as "already installed".
+    pkg = JSON.parse(await readFile(packageJsonPath, 'utf8'));
     artifactPath = join(rootDir, 'build', `${pkg.name}-${pkg.version}.tgz`);
+    if (dryRun && !before.equals(await readFile(packageJsonPath))) packageJsonBefore = before;
   }
-  await inspectPack(artifactPath, { root: rootDir, requireEmptyProxies, proxiesManifest });
+  try {
+    // Inspection checks the pack identity against package.json, so it runs
+    // against the bumped file before a dry run puts the original back.
+    await inspectPack(artifactPath, { root: rootDir, requireEmptyProxies, proxiesManifest });
+  } finally {
+    if (packageJsonBefore) {
+      // A dry run leaves the checkout as it found it; the throwaway
+      // artifact keeps the bumped version it was packed with.
+      await writeFile(packageJsonPath, packageJsonBefore);
+    }
+  }
   const expectedProxies = proxiesManifest
     ? parseProxiesYaml(await readFile(resolve(rootDir, proxiesManifest), 'utf8'))
     : undefined;
@@ -279,6 +303,34 @@ export async function deployApp({
     clientId: env.CRIBL_CLIENT_ID,
     clientSecret: env.CRIBL_CLIENT_SECRET,
   });
+  const provisionScript = join(rootDir, 'scripts', 'provision.ts');
+  const hasProvisioner = provision && await access(provisionScript).then(() => true).catch(() => false);
+
+  if (dryRun) {
+    // Reads only. The upload is itself a write (it stages the archive on
+    // the workspace), so the server preinstall check — which needs the
+    // uploaded source — cannot run here; the local inspection above did.
+    const installedRecord = await readInstalled({ baseUrl, token, pkg });
+    const action = !installedRecord
+      ? 'install'
+      : installedRecord.version === pkg.version
+        ? 'skip (same version already installed)'
+        : 'upgrade';
+    return {
+      artifact: artifactPath,
+      dryRun: {
+        baseUrl,
+        pkg: { name: pkg.name, version: pkg.version },
+        bytes: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        installedVersion: installedRecord?.version ?? null,
+        action,
+        provision: hasProvisioner,
+        restoredPackageJson: packageJsonBefore !== null,
+      },
+    };
+  }
+
   const source = await uploadPack({ baseUrl, token, filename: basename(artifactPath), bytes });
   await preinstallCheck({
     baseUrl,
@@ -290,8 +342,6 @@ export async function deployApp({
   });
   const installed = await installUploadedPack({ baseUrl, token, source, pkg });
 
-  const provisionScript = join(rootDir, 'scripts', 'provision.ts');
-  const hasProvisioner = provision && await access(provisionScript).then(() => true).catch(() => false);
   if (hasProvisioner) await runCommand('npx', ['tsx', 'scripts/provision.ts'], rootDir);
   return { artifact: artifactPath, source, installed };
 }

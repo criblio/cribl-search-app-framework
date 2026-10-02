@@ -23,7 +23,7 @@ import {
   type ProvisionerConfig,
 } from '../provisioner.js';
 import { ProvisionPlanError } from '../provision-guard.js';
-import { InvalidPlanView } from '../ProvisioningPanel.js';
+import { InvalidPlanView, notificationSteps } from '../ProvisioningPanel.js';
 
 function search(id: string, query = 'dataset="otel" | limit 1'): ProvisionedSearch {
   return {
@@ -267,6 +267,103 @@ describe('notification bindings on the apply path', () => {
     ]);
     expect(notifications).toEqual([
       { searchId: 'app__old', step: 'remove', ok: true, detail: 'app__old_Notification_1' },
+    ]);
+  });
+
+  it('ensures notificationTargets after the searches and BEFORE the bindings', async () => {
+    // The reference app created its webhook target in afterReconcile, which
+    // runs after the bindings, so it had to keep binding by hand.
+    const { http, writes } = fakeHttp();
+    const { notifications, targets } = await reconcile(http, {
+      prefix: 'app__',
+      plan: [search('app__alerts')],
+      notificationTargets: [{ id: 'hook', type: 'webhook', url: 'https://example.invalid' }],
+      notifications: [{ searchId: 'app__alerts', targetId: 'hook' }],
+    });
+    expect(targets).toEqual([{ targetId: 'hook', ok: true, detail: 'created' }]);
+    expect(notifications).toEqual([{ searchId: 'app__alerts', step: 'ensure', ok: true, detail: 'created' }]);
+    expect(writes().map((c) => `${c.method} ${c.path}`)).toEqual([
+      'POST /m/default_search/search/saved',
+      'POST /notification-targets',
+      'POST /m/default_search/notifications',
+    ]);
+  });
+
+  it('resolves an async notificationTargets function at apply time', async () => {
+    const { http, writes } = fakeHttp();
+    let called = 0;
+    const { targets } = await reconcile(http, {
+      prefix: 'app__',
+      plan: [search('app__alerts')],
+      notificationTargets: async () => {
+        called++;
+        return [{ id: 'hook', type: 'webhook', url: 'https://from-settings.invalid' }];
+      },
+      notifications: () => [{ searchId: 'app__alerts', targetId: 'hook' }],
+    });
+    expect(called).toBe(1);
+    expect(targets[0]).toMatchObject({ targetId: 'hook', ok: true });
+    expect(writes().find((c) => c.path === '/notification-targets')?.body).toMatchObject({
+      url: 'https://from-settings.invalid',
+    });
+  });
+
+  it('skips a binding whose target failed to ensure, and still binds the others', async () => {
+    const { http, writes } = fakeHttp({ failPost: /"id":"bad_hook"/ });
+    const { notifications, targets } = await reconcile(http, {
+      prefix: 'app__',
+      plan: [search('app__a'), search('app__b')],
+      notificationTargets: [
+        { id: 'bad_hook', type: 'webhook' },
+        { id: 'good_hook', type: 'webhook' },
+      ],
+      notifications: [
+        { searchId: 'app__a', targetId: 'bad_hook' },
+        { searchId: 'app__b', targetId: ['good_hook', 'preexisting'] },
+      ],
+    });
+    expect(targets).toEqual([
+      { targetId: 'bad_hook', ok: false, error: 'POST failed (400): nope' },
+      { targetId: 'good_hook', ok: true, detail: 'created' },
+    ]);
+    expect(notifications[0]).toMatchObject({
+      searchId: 'app__a',
+      ok: false,
+      error: expect.stringContaining('target bad_hook could not be ensured'),
+    });
+    expect(notifications[1]).toMatchObject({ searchId: 'app__b', ok: true });
+    expect(writes().filter((c) => c.path === '/m/default_search/notifications')).toHaveLength(1);
+  });
+
+  it('a throwing notificationTargets function skips every binding without failing the apply', async () => {
+    const { http } = fakeHttp();
+    const { results, notifications, targets } = await reconcile(http, {
+      prefix: 'app__',
+      plan: [search('app__alerts')],
+      notificationTargets: () => {
+        throw new Error('settings unreadable');
+      },
+      notifications: [{ searchId: 'app__alerts', targetId: 'hook' }],
+    });
+    expect(results.every((r) => r.ok)).toBe(true);
+    expect(targets).toEqual([{ targetId: '*', ok: false, error: 'notificationTargets: settings unreadable' }]);
+    expect(notifications[0]).toMatchObject({ ok: false, error: expect.stringContaining('settings unreadable') });
+  });
+
+  it('the panel Apply path reports targets before bindings', async () => {
+    // ProvisioningPanel's handleApply is applyProvisioningActions + notificationSteps.
+    const { http } = fakeHttp();
+    const config: ProvisionerConfig = {
+      prefix: 'app__',
+      plan: [search('app__alerts')],
+      notificationTargets: [{ id: 'hook', type: 'webhook' }],
+      notifications: [{ searchId: 'app__alerts', targetId: 'hook' }],
+    };
+    const actions = diffProvisioned(config.plan as ProvisionedSearch[], []);
+    const { notifications, targets } = await applyProvisioningActions(http, config, actions);
+    expect(notificationSteps(notifications, targets)).toEqual([
+      { label: 'Notification target: hook (created)', ok: true, detail: undefined },
+      { label: 'Notification ensure: app__alerts (created)', ok: true, detail: undefined },
     ]);
   });
 

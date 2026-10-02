@@ -7,7 +7,7 @@ import * as root from '@criblio/app-tooling';
 import { createAppPack, packageApp, type AppPackStream } from '@criblio/app-tooling/pack';
 import { backendScripts, formatInspection, inspectPack, type PackInspection } from '@criblio/app-tooling/inspect';
 import { diffProxies, parseProxiesYaml, validateProxies, type ParsedProxies } from '@criblio/app-tooling/proxies';
-import { deployApp, installUploadedPack, type DeployResult } from '@criblio/app-tooling/deploy';
+import { deployApp, installUploadedPack, type DeployDryRunResult, type DeployResult } from '@criblio/app-tooling/deploy';
 import { createReleaseEvidence, type ReleaseMetadata } from '@criblio/app-tooling/release-evidence';
 import { runStaticSecurityChecks } from '@criblio/app-tooling/security';
 
@@ -22,11 +22,13 @@ export async function exercise(): Promise<void> {
   await stream.closePromise;
   const artifact: string = await packageApp();
   const deployed: DeployResult = await deployApp({ requireEmptyProxies: true, provision: false });
+  const planned: DeployDryRunResult = await deployApp({ dryRun: true });
+  const action: string = planned.dryRun.action;
   const installed = await installUploadedPack({ baseUrl: 'https://x', token: 't', source: 's', pkg: { name: 'n', version: '1.0.0' } });
   const meta: ReleaseMetadata = await createReleaseEvidence({ artifact });
   await runStaticSecurityChecks('.');
   const fromRoot: string[] = root.diffProxies(root.parseProxiesYaml(''), null);
-  void [problems, diffs, line, scripts, deployed, installed.warning, meta.artifact_sha256, fromRoot];
+  void [problems, diffs, line, scripts, deployed, action, installed.warning, meta.artifact_sha256, fromRoot];
 }
 
 // @ts-expect-error — options are typed, not `any`

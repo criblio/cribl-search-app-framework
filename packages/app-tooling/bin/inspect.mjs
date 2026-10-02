@@ -1,21 +1,35 @@
 #!/usr/bin/env node
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
+import { parseArgsOrExit } from '../src/cli-args.mjs';
 import { formatInspection, inspectPack } from '../src/inspect.mjs';
+
+const USAGE = `Usage: cribl-app-inspect [options] [artifact.tgz]
+
+Inspect a packaged app. Defaults to build/<name>-<version>.tgz.
+
+Options:
+  --proxies-manifest <path>    Require the packaged proxies.yml to equal this file
+  --require-empty-proxies      Refuse any external proxy capability
+  -h, --help                   Show this help`;
+
+const { values, positionals } = parseArgsOrExit(process.argv.slice(2), {
+  flags: {
+    '--proxies-manifest': 'string',
+    '--require-empty-proxies': 'boolean',
+  },
+  positionals: 1,
+}, { command: 'cribl-app-inspect', usage: USAGE });
 
 try {
   const root = process.cwd();
-  const args = process.argv.slice(2);
-  const requireEmptyProxies = args.includes('--require-empty-proxies');
-  const manifestIndex = args.indexOf('--proxies-manifest');
-  const proxiesManifest = manifestIndex >= 0 ? args[manifestIndex + 1] : undefined;
-  if (manifestIndex >= 0 && !proxiesManifest) throw new Error('--proxies-manifest requires a path');
-  const positional = args.filter(
-    (arg, index) => !arg.startsWith('--') && (manifestIndex < 0 || index !== manifestIndex + 1),
-  );
   const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
-  const artifact = positional[0] ?? join(root, 'build', `${pkg.name}-${pkg.version}.tgz`);
-  const report = await inspectPack(artifact, { root, requireEmptyProxies, proxiesManifest });
+  const artifact = positionals[0] ?? join(root, 'build', `${pkg.name}-${pkg.version}.tgz`);
+  const report = await inspectPack(artifact, {
+    root,
+    requireEmptyProxies: values['--require-empty-proxies'] === true,
+    proxiesManifest: values['--proxies-manifest'],
+  });
   console.log(formatInspection(report));
 } catch (error) {
   console.error(`Pack inspection failed: ${error.message}`);

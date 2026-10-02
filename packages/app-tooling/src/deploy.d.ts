@@ -43,7 +43,9 @@ export function installUploadedPack(options: InstallUploadedPackOptions): Promis
 export interface DeployAppOptions {
   /** App root. Default `process.cwd()`. */
   root?: string;
-  /** Existing artifact to deploy; otherwise `npm run package` builds one. */
+  /** Existing artifact to deploy; otherwise `npm run package` builds one
+   * and the artifact is named from package.json as it reads AFTER packaging
+   * (`apps package` increments the version). */
   artifact?: string;
   requireEmptyProxies?: boolean;
   /** Expected proxies.yml, relative to `root`. */
@@ -51,6 +53,25 @@ export interface DeployAppOptions {
   requireNoPolicies?: boolean;
   /** Run `scripts/provision.ts` after install when present. Default true. */
   provision?: boolean;
+  /** Build and inspect the artifact, read the installed record, and return
+   * the plan in `DeployResult.dryRun` — nothing is uploaded, installed or
+   * provisioned. A package.json bumped by packaging is restored. Default false. */
+  dryRun?: boolean;
+}
+
+/** What a real deploy would have done. */
+export interface DeployDryRunPlan {
+  baseUrl: string;
+  pkg: { name: string; version: string };
+  bytes: number;
+  sha256: string;
+  /** `null` when the app is not installed. */
+  installedVersion: string | null;
+  action: 'install' | 'upgrade' | 'skip (same version already installed)';
+  /** `scripts/provision.ts` would run after install. */
+  provision: boolean;
+  /** Packaging bumped package.json and the dry run wrote it back. */
+  restoredPackageJson: boolean;
 }
 
 export interface DeployResult {
@@ -59,7 +80,15 @@ export interface DeployResult {
   installed: InstallResult;
 }
 
+/** `deployApp({ dryRun: true })`: the built artifact and the plan, no upload. */
+export interface DeployDryRunResult {
+  artifact: string;
+  dryRun: DeployDryRunPlan;
+}
+
 /** Validate and install or upgrade one exact Cribl App candidate without
  * force. Reads `CRIBL_BASE_URL`, `CRIBL_CLIENT_ID`, `CRIBL_CLIENT_SECRET`
  * from the environment or the app's `.env`. */
-export function deployApp(options?: DeployAppOptions): Promise<DeployResult>;
+export function deployApp(options: DeployAppOptions & { dryRun: true }): Promise<DeployDryRunResult>;
+export function deployApp(options?: DeployAppOptions & { dryRun?: false }): Promise<DeployResult>;
+export function deployApp(options?: DeployAppOptions): Promise<DeployResult | DeployDryRunResult>;

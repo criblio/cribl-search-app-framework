@@ -99,7 +99,17 @@ browser TS graph. Common patterns:
   expiresAt }`; `clearBearerTokenCache()` resets. `createNodeHttpClient`
   uses the cache.
 - `oauthEndpoints(baseUrl)` — pick prod vs staging OAuth domain
-- `loadSettings() / saveSettings()` — KV-store-backed app settings
+- `loadSettings(defaults?, { key? }) / saveSettings(settings, { key?, merge? })`
+  — KV-store-backed app settings, at KV key `settings` unless `key` names
+  the app's own. `merge: true` reads the stored object and shallow-merges
+  over it so fields another page owns survive; a failed or misrouted read
+  aborts with `KvError` and writes nothing (not atomic against a racing
+  writer). `saveSettingsResult` takes the same options
+- `kvGetJson(key)` / `kvGetText(key)` (`/kv`) — strict KV reads: the
+  store's own 404 `{"message":"Key not found"}` is absence (`{found:false}`
+  / `null`); an HTML body (misroute), a 403 or any other failure is a
+  `KvError`. `kvGetText` returns the value verbatim — for raw strings such
+  as a proxy-injected header value
 - `loadDotEnv(path)` — `.env` parser for Node scripts
 - `runWithLimit(items, limit, worker, { signal }?)` /
   `runWithLimitSettled(...)` (`@criblio/app-utils/search`) — bounded
@@ -274,9 +284,10 @@ a confident answer about an image the model never saw.
   HTTP clients with the right auth headers for either environment
 - `applyProvisioningActions(http, config, actions)` — the ONE apply
   path (`reconcile` and `<ProvisioningPanel>` both use it): validate,
-  seed lookups, unbind deleted searches, write, bind notifications.
-  Returns `{ results, notifications }`
-- `ProvisionerConfig.guard` / `.validate` / `.notifications` — see below
+  seed lookups, unbind deleted searches, write, ensure notification
+  targets, bind notifications. Returns `{ results, notifications, targets }`
+- `ProvisionerConfig.guard` / `.validate` / `.notifications` /
+  `.notificationTargets` — see below
 
 **Background searches stay true** (`/provision-guard`,
 `/provision-canary`, `/notifications`, `/vt-results`)
@@ -317,6 +328,12 @@ Every failure these exist for reported success in every API layer.
   `schedule.notifications` is dropped by the server**. Or declare
   `config.notifications: [{ searchId, targetId, conf }]` and the apply
   path binds after writing the search and unbinds before deleting it.
+  A target the app creates goes in `config.notificationTargets` (an array,
+  or a sync/async function called at apply time): it is ensured after the
+  searches and BEFORE the bindings, and a binding whose target failed is
+  skipped and reported. Do not create it in `<ProvisioningPanel
+  afterReconcile>` — that runs after the bindings, which is why APM had to
+  keep binding by hand.
 - `readVtResults(jobNames, { earliest?, latest?, limit?, signal?,
   latestRunOnly?, runQuery? })` → `Map<jobName, rows[]>` from ONE
   `dataset="$vt_results" | where jobName in (…)` job (the `jobName=[…]`
@@ -331,7 +348,12 @@ Every failure these exist for reported success in every API layer.
   catalog and cron mapper
 - `offsetCron(cron, minutes)` — stagger a dependent search after its
   source at the same cadence (`*/5` → `1-59/5`; every-minute is left
-  alone, never rewritten to an hourly `1 * * * *`)
+  alone, never rewritten to an hourly `1 * * * *`). The offset is
+  relative to the cron it is given and **composes**: `1-59/5` + 2 →
+  `3-59/5`. Pass the source's cron (`getSearchCadenceCron()`), never an
+  already-offset schedule read back from a saved search, or the dependent
+  drifts on every reconcile. APM's former local copy returned `a-59/N`
+  unchanged; that was not parity, and the framework does not copy it
 - `getSearchCadence / setSearchCadence / subscribeSearchCadence /
   getSearchCadenceCron` — module-level pub/sub for the active
   scheduled-search cadence
@@ -342,9 +364,12 @@ Every failure these exist for reported success in every API layer.
 - `getCurrentDataset / setCurrentDataset / subscribeDataset` —
   module-level pub/sub for the active Cribl dataset
 - `useDataset()` — React hook backed by `useSyncExternalStore`
-- `<DatasetProvider defaultDataset onError?>` — puts `defaultDataset` in
-  the store before children render (only if the store is empty), then
-  loads the saved dataset and pushes it in; nothing saved ⇒ the app default
+- `<DatasetProvider defaultDataset onError? settingsKey? loadDataset?>` —
+  puts `defaultDataset` in the store before children render (only if the
+  store is empty), then loads the saved dataset and pushes it in; nothing
+  saved ⇒ the app default. The saved value is `dataset` at KV key
+  `settings`; `settingsKey` reads the app's own key, `loadDataset` replaces
+  the read (read through a ref, like `onError`)
 - A failed KV read keeps the app default but is not silent: it lands in
   `useDatasetLoadError()` / `getDatasetLoadError()` /
   `subscribeDatasetLoadError` (`/dataset`), goes to `onError(err: Error)`,
@@ -585,8 +610,12 @@ why only the packer was superseded.
 
 - `cribl-app-package` — **deprecated**; use `apps package`. It cannot
   ship `config/backend.yml` or the bundles `apps build` produces, so an
-  app with endpoints packs an archive that installs and then 404s. Still
-  works, and stays correct, for apps generated before the contract
+  app with endpoints packs an archive that installs and then 404s; it also
+  drops `policies.yml`, `schedules.yml` and README.md. The warning it
+  prints on every run lists the migration (devDependency `@cribl/apps`,
+  `"package": "apps package"`, app-tooling >= 0.4.2 so deploy follows the
+  version bump). Still works for apps with no backend endpoints that were
+  generated before the contract.
 - `cribl-app-inspect` — archive shape, manifest, static asset, backend
   manifest/bundle correspondence, and optional proxy policy validation.
   `apps build` and `apps package` run separately, so a manifest can name
@@ -606,14 +635,26 @@ why only the packer was superseded.
   moved the version). A same-version redeploy is skipped and reported as
   unconfirmable: the platform exposes no installed artifact digest or
   operation receipt, so same-version records are indistinguishable and only
-  a version bump is certain.
+  a version bump is certain. `--dry-run` builds and inspects the artifact,
+  reads the installed version and prints install / upgrade / skip — no
+  upload (it is itself a write, so the server preinstall check cannot run),
+  install or provisioning, and a package.json bumped by packaging is put
+  back. The artifact is named from package.json as it reads AFTER
+  `npm run package`, because `apps package` increments the version first;
+  before 0.4.2 deploy named it from the pre-package version and picked up
+  the previous run's archive.
+- **Every bin rejects an unknown option, a missing value or a stray
+  argument** with usage and exit 2 before doing anything. They used to
+  pick known flags out of argv and ignore the rest, so `npm run deploy --
+  --dry` was a real deploy. `--help` on each lists its options.
 - `cribl-app-release-evidence` — checksum, source/framework metadata,
   and deterministic production CycloneDX SBOM
 - `cribl-app-security` — SHA-pinned Action, dependency-license, and
   tracked-secret gates
 - `@criblio/app-tooling/playwright` — live-workspace test helpers (needs
   `@playwright/test` and `@criblio/app-utils` in the app): `installCriblHostGlobals`,
-  `gotoApp`, `appFrame`, `dismissHostAnnouncements`, `loginSetup`,
+  `gotoApp`, `appFrame` (both also take `{ appPath }` and parse the id
+  with `appIdFromPath`), `dismissHostAnnouncements`, `loginSetup`,
   `runSearch`, `loadTestEnv`, `criblCredentialsFromEnv`. Opening
   `/app-ui/<app>/` directly gives an empty `#root` and 401s, because the
   host globals and Bearer fetch wrapper are missing; these put them back.

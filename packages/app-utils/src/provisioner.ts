@@ -33,8 +33,10 @@ import {
   type ProvisionValidation,
 } from './provision-guard.js';
 import {
+  ensureNotificationTarget,
   ensureSavedSearchNotification,
   removeNotificationsForSearch,
+  type NotificationTarget,
   type SavedSearchNotification,
 } from './notifications.js';
 
@@ -107,10 +109,26 @@ export interface ProvisionerConfig {
    * Saved-search → notification-target bindings to keep in place. When
    * set (even to `[]`), the apply path also ensures each binding after its
    * search is written, and removes every binding of a search it deletes
-   * before deleting it. Targets must already exist
-   * (`ensureNotificationTarget`).
+   * before deleting it. A target must exist before its binding is
+   * written: declare it in `notificationTargets` (ensured first, on the
+   * same apply), or create it yourself beforehand.
    */
   notifications?: SavedSearchNotification[] | (() => SavedSearchNotification[]);
+  /**
+   * Notification targets to create or update (`ensureNotificationTarget`)
+   * on the apply path, AFTER the searches are written and BEFORE any
+   * binding in `notifications`. A binding whose target failed to ensure is
+   * skipped and reported rather than written against a missing target.
+   *
+   * A function is called at apply time and may be async — for a target
+   * whose body depends on something read then (a webhook URL from
+   * settings). This is the supported replacement for creating a target in
+   * `<ProvisioningPanel afterReconcile>`: that hook runs after the
+   * bindings, so a binding to a target it creates never had one.
+   * If the function throws, no target is ensured and every binding is
+   * skipped; that is reported as one failed target with id `*`.
+   */
+  notificationTargets?: NotificationTarget[] | (() => NotificationTarget[] | Promise<NotificationTarget[]>);
 }
 
 /** Extra plan rules for `ProvisionerConfig.validate`. */
@@ -118,6 +136,15 @@ export type ProvisionPlanValidator = (
   plan: ProvisionedSearch[],
   context: { prefix: string; seedLookups: SeedLookup[] },
 ) => ProvisionProblem[] | ProvisionValidation;
+
+/** Outcome of ensuring one `ProvisionerConfig.notificationTargets` entry. */
+export interface NotificationTargetResult {
+  targetId: string;
+  ok: boolean;
+  /** `created` / `updated`. */
+  detail?: string;
+  error?: string;
+}
 
 /** Outcome of one notification step on the apply path. */
 export interface NotificationResult {
@@ -515,7 +542,7 @@ function plannedSearches(actions: PlanAction[]): ProvisionedSearch[] {
 /**
  * Apply a previewed action list the way `reconcile()` does: validate,
  * seed lookups, remove notifications of searches being deleted, write the
- * searches, then ensure notification bindings. The single apply path for
+ * searches, ensure notification targets, then ensure notification bindings. The single apply path for
  * a CLI and `<ProvisioningPanel>`, so the two cannot diverge — the
  * reference app's UI Apply ran no guard while its CLI did.
  *
@@ -527,7 +554,7 @@ export async function applyProvisioningActions(
   http: HttpClient,
   config: ProvisionerConfig,
   actions: PlanAction[],
-): Promise<{ results: ActionResult[]; notifications: NotificationResult[] }> {
+): Promise<{ results: ActionResult[]; notifications: NotificationResult[]; targets: NotificationTargetResult[] }> {
   assertValidPlan(config, plannedSearches(actions));
   if (config.seedLookups?.length) {
     await seedLookups(http, config.seedLookups);
@@ -549,6 +576,10 @@ export async function applyProvisioningActions(
     }
   }
   const results = await applyProvisioningPlan(http, actions, { guard: false });
+  // Targets before bindings: a binding names its target by id, and one
+  // written before the target exists can never fire.
+  const targets = config.notificationTargets === undefined ? [] : await ensureTargets(http, config.notificationTargets);
+  const failedTargets = new Map(targets.filter((t) => !t.ok).map((t) => [t.targetId, t.error ?? 'failed']));
   if (bindings) {
     const written = new Set(
       results.filter((r) => r.ok && r.action.kind !== 'delete').map((r) => (r.action as { want: ProvisionedSearch }).want.id),
@@ -567,6 +598,19 @@ export async function applyProvisioningActions(
         });
         continue;
       }
+      const missing = (Array.isArray(binding.targetId) ? binding.targetId : [binding.targetId]).find(
+        (id) => failedTargets.has(id) || failedTargets.has('*'),
+      );
+      if (missing !== undefined) {
+        const why = failedTargets.get(missing) ?? failedTargets.get('*');
+        notifications.push({
+          searchId,
+          step: 'ensure',
+          ok: false,
+          error: `skipped: notification target ${missing} could not be ensured (${why})`,
+        });
+        continue;
+      }
       try {
         const outcome = await ensureSavedSearchNotification(http, binding);
         notifications.push({ searchId, step: 'ensure', ok: true, detail: outcome });
@@ -575,7 +619,29 @@ export async function applyProvisioningActions(
       }
     }
   }
-  return { results, notifications };
+  return { results, notifications, targets };
+}
+
+async function ensureTargets(
+  http: HttpClient,
+  declared: NonNullable<ProvisionerConfig['notificationTargets']>,
+): Promise<NotificationTargetResult[]> {
+  let list: NotificationTarget[];
+  try {
+    list = typeof declared === 'function' ? await declared() : declared;
+  } catch (err) {
+    return [{ targetId: '*', ok: false, error: `notificationTargets: ${errorMessage(err)}` }];
+  }
+  const out: NotificationTargetResult[] = [];
+  for (const target of list) {
+    const targetId = typeof target?.id === 'string' && target.id ? target.id : '(missing id)';
+    try {
+      out.push({ targetId, ok: true, detail: await ensureNotificationTarget(http, target) });
+    } catch (err) {
+      out.push({ targetId, ok: false, error: errorMessage(err) });
+    }
+  }
+  return out;
 }
 
 function resolveBindings(
@@ -601,13 +667,14 @@ export async function reconcile(
   actions: PlanAction[];
   results: ActionResult[];
   notifications: NotificationResult[];
+  targets: NotificationTargetResult[];
 }> {
   const plan = resolvePlan(config.plan);
   assertValidPlan(config, plan);
   const current = await listProvisioned(http, config.prefix);
   const actions = diffProvisioned(plan, current);
-  const { results, notifications } = await applyProvisioningActions(http, config, actions);
-  return { plan, current, actions, results, notifications };
+  const { results, notifications, targets } = await applyProvisioningActions(http, config, actions);
+  return { plan, current, actions, results, notifications, targets };
 }
 
 /** Dry-run helper: return the actions without applying them. Throws
