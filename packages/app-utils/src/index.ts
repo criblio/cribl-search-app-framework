@@ -135,3 +135,22 @@ export {
   captureQueryGeneration,
 } from './query-generation.js';
 export { createStore, useStore, type Store } from './store.js';
+export {
+  TIME_RANGES,
+  binSecondsFor,
+  previousWindow,
+  relativeTimeMs,
+  type TimeRangeOption,
+} from './time.js';
+export {
+  usePageLoad,
+  createPageLoadController,
+  INITIAL_PAGE_LOAD_STATE,
+  type PageLoad,
+  type PageLoadContext,
+  type PageLoadController,
+  type PageLoadFn,
+  type PageLoadOptions,
+  type PageLoadPhase,
+  type PageLoadState,
+} from './page-load.js';

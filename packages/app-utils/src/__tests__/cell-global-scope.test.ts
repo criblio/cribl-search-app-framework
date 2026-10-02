@@ -38,6 +38,7 @@ const CELL_ENTRIES = [
   '../metrics.js',
   '../metrics-catalog.js',
   '../query-generation.js',
+  '../time.js',
 ];
 
 interface Violation {

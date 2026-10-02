@@ -139,6 +139,42 @@ on the initial load (no data yet). Each panel updates in place when
 its query resolves. Show a thin progress bar to indicate a refresh
 is in progress.
 
+Use `usePageLoad` (`@criblio/app-utils/page-load`) rather than writing
+this by hand. It starts a query generation per load (aborting the last
+one's reads), drops results and failures from superseded loads, never
+reports an aborted read as a failure, and only reports `initial` before
+the first load settles:
+
+```tsx
+const { phase, failures, retry, refresh } = usePageLoad(async ({ isCurrent, fail }) => {
+  await Promise.allSettled([
+    runQuery(RATE_KQL, range, 'now', 100)
+      .then((rows) => { if (isCurrent()) setRate(rows); })
+      .catch((e) => fail('Request rate', e)),
+  ]);
+}, [range]);
+// phase: 'initial' → skeletons; 'refreshing' → keep data, dim it; 'idle'.
+// Polling: setInterval(() => refresh({ silent: true }), 60_000)
+```
+
+### Partial failures are not health
+A failed query must never render as an empty table or "0 errors". Show
+`<PartialFailureBanner failures={failures} onRetry={retry} />`
+(`@criblio/app-utils/partial-failure-banner`, Capra) above the panels —
+it says "Empty values below are not evidence of health" and names each
+failed panel — and render a failed panel's values as unknown, not zero.
+
+### Page state lives in the URL
+Range, filters and tabs go in the query string so drill-downs, reloads,
+back/forward and shared links keep them: `useRangeParam('-1h')` /
+`useQueryParam(name, default, { legacy, history })` from
+`@criblio/app-utils/url-state` (needs `react-router-dom`). Each setter is
+one functional `setSearchParams` write. React Router builds every write
+from the current render's params, so two writes in one handler lose one —
+never write the same URL twice in a handler. Pick ranges from
+`TIME_RANGES`, bin with `binSecondsFor(range)`, and compare against
+`previousWindow(range)` from `@criblio/app-utils/time`.
+
 ### Bounded search fan-out
 Never fire one search per item with a bare `Promise.all`. Cribl Search
 allows ~20 concurrent jobs per cluster (`Search queue limit reached
