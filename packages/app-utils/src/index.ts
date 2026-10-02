@@ -1,4 +1,4 @@
-export { runQuery, apiUrl, runWithLimit, runWithLimitSettled, type RunWithLimitOptions } from './search.js';
+export { runQuery, apiUrl, runWithLimit, runWithLimitSettled, SEARCH_FANOUT_LIMIT, type RunWithLimitOptions } from './search.js';
 export {
   runSearchJob,
   SearchJobError,

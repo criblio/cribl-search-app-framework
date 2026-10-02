@@ -75,6 +75,9 @@ export async function runQuery(
   return runSearchJob(browserSearchClient(sig), kql, { earliest, latest, limit, signal: sig });
 }
 
+/** Default `runWithLimit` cap: the cluster's ~20 concurrent search jobs are shared by every panel and user, and APM's Spotlight hit 429s uncapped. */
+export const SEARCH_FANOUT_LIMIT = 4;
+
 /** Options for {@link runWithLimit} / {@link runWithLimitSettled}. */
 export interface RunWithLimitOptions {
   /**
@@ -92,8 +95,8 @@ export interface RunWithLimitOptions {
  * This exists for search fan-out: Cribl Search caps concurrent jobs per
  * cluster (`Search queue limit reached (max: 20)`), and a page already holds
  * several of those slots. APM's Spotlight fanned out 22 attribute queries
- * unbounded and the tail returned 429s; a limit of 4 fixed it. Use 4 unless
- * you know the page runs nothing else.
+ * unbounded and the tail returned 429s; a limit of 4 fixed it. Use
+ * {@link SEARCH_FANOUT_LIMIT} unless you know the page runs nothing else.
  *
  * One item's failure never stops the others — a slow or broken attribute
  * must not blank every other panel.
@@ -136,7 +139,7 @@ export async function runWithLimitSettled<T, R>(
  * cluster slot — once the caller has moved on.
  *
  * ```ts
- * const rows = await runWithLimit(attrs, 4, (attr, _i, signal) =>
+ * const rows = await runWithLimit(attrs, SEARCH_FANOUT_LIMIT, (attr, _i, signal) =>
  *   runQuery(distributionKql(attr), '-1h', 'now', 20, signal));
  * ```
  *

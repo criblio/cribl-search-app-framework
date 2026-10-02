@@ -144,7 +144,7 @@ Never fire one search per item with a bare `Promise.all`. Cribl Search
 allows ~20 concurrent jobs per cluster (`Search queue limit reached
 (max: 20)`), the page already holds several, and the overflow returns
 429s — APM's 22-query Spotlight did exactly that. Use
-`runWithLimit(items, 4, worker, { signal })` from
+`runWithLimit(items, SEARCH_FANOUT_LIMIT, worker, { signal })` from
 `@criblio/app-utils/search` (or `runWithLimitSettled` for per-item
 errors); results come back in input order and one failure never stops
 the rest.

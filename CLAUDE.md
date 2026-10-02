@@ -95,7 +95,7 @@ browser TS graph. Common patterns:
   fan-out for per-item searches; results in input order. Cribl Search
   caps concurrent jobs per cluster at ~20 and a page already holds
   several, so APM's unbounded 22-query Spotlight returned 429s until it
-  ran at 4. `runWithLimit` resolves `R[]` or rejects with the
+  ran at 4 — use `SEARCH_FANOUT_LIMIT` (= 4). `runWithLimit` resolves `R[]` or rejects with the
   lowest-index error, but only after every item has settled (one failure
   never stops the rest); the settled form returns
   `PromiseSettledResult<R>[]` for per-item errors. Once `signal` aborts,
@@ -103,7 +103,7 @@ browser TS graph. Common patterns:
   as its third argument to cancel its own job.
 
   ```ts
-  const rows = await runWithLimit(attrs, 4, (attr, _i, signal) =>
+  const rows = await runWithLimit(attrs, SEARCH_FANOUT_LIMIT, (attr, _i, signal) =>
     runQuery(distributionKql(attr), '-1h', 'now', 20, signal));
   ```
 

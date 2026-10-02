@@ -7,7 +7,7 @@
  * failed item does not stop the rest.
  */
 import { describe, expect, it } from 'vitest';
-import { runWithLimit, runWithLimitSettled } from '../search.js';
+import { SEARCH_FANOUT_LIMIT, runWithLimit, runWithLimitSettled } from '../search.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
@@ -32,7 +32,8 @@ describe('runWithLimit', () => {
   it('never exceeds the limit: 22 Spotlight attributes at 4', async () => {
     const attrs = Array.from({ length: 22 }, (_, i) => `attr${i}`);
     const { state, worker } = tracked((i) => i);
-    await runWithLimit(attrs, 4, worker);
+    expect(SEARCH_FANOUT_LIMIT).toBe(4);
+    await runWithLimit(attrs, SEARCH_FANOUT_LIMIT, worker);
     expect(state.peak).toBe(4);
     expect(state.started).toHaveLength(22);
   });
