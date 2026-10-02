@@ -319,6 +319,38 @@ a confident answer about an image the model never saw.
 - `<ResilienceBoundary>` — router-free root/panel render containment
   with retry and an optional app-owned fallback renderer
 
+**Time, URL state, page loads** (`@cribl/app-utils/time`, `/url-state`,
+`/page-load`, `/partial-failure-banner`)
+
+- `TIME_RANGES: readonly TimeRangeOption[]` (`{ label, value, binSeconds }`,
+  15m/1h/6h/24h), `binSecondsFor(range, ranges?) → number`,
+  `previousWindow(earliest, latest = 'now') → { earliest, latest } | null`,
+  `relativeTimeMs(rel) → number | null`. Pure, cell-safe. Unparseable
+  input is `null`, never a one-hour guess — a guessed window makes a "vs
+  previous" delta lie. `previousWindow('-1h')` → `{ earliest: '-2h', latest: '-1h' }`.
+- `useQueryParam(name, default, { legacy?, history?: 'replace' | 'push' })
+  → [value, set]` and `useRangeParam(default, opts)` (`?range=`). One
+  functional `setSearchParams` write that omits the param at its default
+  and deletes `legacy` keys: React Router builds every write from the
+  render's params, so a second write in the same handler reverts the
+  first (APM's legacy `?lookback=` bug). The ONLY module that imports a
+  router — `react-router-dom` is an optional peer for this subpath alone,
+  and it is never re-exported from the root.
+  `const [range, setRange] = useRangeParam('-1h', { legacy: ['lookback'] });`
+- `usePageLoad(load, deps, { errorKey? }) → { phase: 'initial' |
+  'refreshing' | 'idle', failures, updatedAt, retry(), refresh({ silent? }) }`,
+  `load(ctx: { signal, isCurrent, fail(key, err), ok(key) })`. Full
+  loading only before the first load settles; each load is a new query
+  generation; superseded results and aborted reads never become failures;
+  `failures` is replaced when a load settles, not cleared when it starts
+  (no banner flicker on polls). Own subpath so `/query-generation` stays
+  React-free for cells. `createPageLoadController` is the same machine
+  without React. One per page.
+- `<PartialFailureBanner failures={Record | Map} onRetry? />` — Capra
+  `Alert`: "Some data is unavailable. Empty values below are not evidence
+  of health." plus one line per failed panel and a Retry button.
+  `<PartialFailureBanner failures={failures} onRetry={retry} />`
+
 ### The cell harness is no longer here
 
 `@criblio/cell-harness` moved to **`criblio/goattown`** (`cell/src/harness/`)
