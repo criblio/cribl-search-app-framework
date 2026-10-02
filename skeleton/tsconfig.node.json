@@ -3,13 +3,8 @@
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
     "composite": true,
     "target": "ES2022",
-    "lib": [
-      "ES2022",
-      "DOM"
-    ],
-    "types": [
-      "node"
-    ],
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
@@ -17,12 +12,6 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": [
-    "vite.config.ts",
-    "vitest.config.ts",
-    "playwright.config.ts",
-    "playwright.local.config.ts",
-    "tests",
-    "tests-local"
-  ]
+  /* DOM: Playwright specs type page-side callbacks such as addInitScript. */
+  "include": ["vite.config.ts", "vitest.config.ts", "playwright.config.ts", "playwright.local.config.ts", "tests", "tests-local"]
 }

@@ -437,7 +437,7 @@ shell that shape needs; add pages, queries and scheduled searches into it.
 | `src/routes/ConfigurationPage.tsx` | Setup status, dataset picker, cadence picker, `ProvisioningPanel`. Save is disabled when settings fail to load |
 | `src/provisioning/plan.ts` | `buildPlan(settings)` / `provisionerConfig(settings)`: the only place scheduled searches are defined. Starts empty |
 | `src/data/` | `dataset.ts` (`source()`, the dataset clause every query starts from); put query builders beside it |
-| `src/**/__tests__/` | Vitest (`npm test`); `vitest.config.ts` inlines `@criblio/app-utils` so its CSS imports load |
+| `src/**/__tests__/` | Vitest (`npm test`); `vitest.config.ts` inlines `@criblio/app-utils` so its CSS imports load; `tsconfig.test.json` type-checks them with Node types (`node:fs` source scans) |
 | `tests/` | Live Playwright against a workspace (`npm run test:e2e`, needs `.env`) |
 | `tests-local/` | Playwright against `vite preview` with a mocked API (`npm run test:local`, no credentials) |
 
