@@ -22,13 +22,15 @@ import { loadSettings } from './settings.js';
  * `loadDataset` replaces the read entirely (a dataset stored under another
  * field, or outside the settings object) — its result is trimmed the same
  * way, and `appDefault` is then only the provider's render-time default.
+ * `context` is what that loader receives; default: never cancelled.
  */
 export async function loadSavedDataset(
   appDefault?: string,
   source: SavedDatasetSource = {},
+  context: DatasetLoadContext = NEVER_CANCELLED,
 ): Promise<string | undefined> {
   if (source.loadDataset) {
-    const ds = await source.loadDataset();
+    const ds = await source.loadDataset(context);
     return typeof ds === 'string' && ds.trim() ? ds.trim() : undefined;
   }
   const fallback = appDefault?.trim();
@@ -40,21 +42,50 @@ export async function loadSavedDataset(
   return typeof ds === 'string' && ds.trim() ? ds.trim() : undefined;
 }
 
+/**
+ * Passed to a custom `loadDataset`. The load is cancelled when the
+ * provider unmounts, when its `defaultDataset`/`settingsKey` changes and
+ * the load restarts, and in StrictMode's discarded first effect. A loader
+ * with side effects of its own (APM applies feature flags from the same
+ * settings read) checks `isCancelled()` before applying them, and can hand
+ * `signal` to `fetch`/`kvGetJson` to stop the read itself. Whatever a
+ * cancelled load resolves or rejects with is dropped by the provider.
+ */
+export interface DatasetLoadContext {
+  /** Aborted when the load is cancelled. */
+  signal: AbortSignal;
+  /** True once the load is cancelled; check it before any side effect. */
+  isCancelled(): boolean;
+}
+
+const NEVER_CANCELLED: DatasetLoadContext = {
+  signal: new AbortController().signal,
+  isCancelled: () => false,
+};
+
+/** A custom saved-dataset read. Resolve `undefined` for "nothing saved";
+ * reject (ideally with `KvError`) when the read failed. Using the context
+ * is optional, so a zero-argument `async () => …` loader still fits. */
+export type DatasetLoader = (context: DatasetLoadContext) => Promise<string | undefined | null>;
+
 /** Where the saved dataset is read from. Default: the `dataset` field of
  * the object at KV key `settings`. */
 export interface SavedDatasetSource {
   /** KV key of the app's settings object. Default `'settings'`. */
   settingsKey?: string;
-  /** Custom read; wins over `settingsKey`. Resolve `undefined` for "nothing
-   * saved"; reject (ideally with `KvError`) when the read failed. */
-  loadDataset?: () => Promise<string | undefined | null>;
+  /** Custom read; wins over `settingsKey`. See `DatasetLoader`. */
+  loadDataset?: DatasetLoader;
 }
 
 /** The `console.warn` text for a load failure nobody else reports. */
 export const DATASET_LOAD_WARNING = 'DatasetProvider: could not load the saved dataset; using the app default.';
 
 export interface SyncSavedDatasetOptions extends SavedDatasetSource {
-  /** Checked after the read settles; true drops the result (unmounted). */
+  /** Cancels the load: passed to `loadDataset`, and an aborted signal
+   * drops the result, so a cancelled load changes nothing. */
+  signal?: AbortSignal;
+  /** Checked after the read settles; true drops the result (unmounted).
+   * Either this or an aborted `signal` cancels. */
   isCancelled?: () => boolean;
   /** Called with the KV failure. Without it the failure is logged with
    * `console.warn`, so it is never silent. */
@@ -69,11 +100,18 @@ export interface SyncSavedDatasetOptions extends SavedDatasetSource {
  * clears it. Never rejects.
  */
 export async function syncSavedDataset(appDefault?: string, opts: SyncSavedDatasetOptions = {}): Promise<void> {
+  const signal = opts.signal ?? new AbortController().signal;
+  const context: DatasetLoadContext = {
+    signal,
+    isCancelled: () => signal.aborted || (opts.isCancelled?.() ?? false),
+  };
   let ds: string | undefined;
   try {
-    ds = await loadSavedDataset(appDefault, { settingsKey: opts.settingsKey, loadDataset: opts.loadDataset });
+    ds = await loadSavedDataset(appDefault, { settingsKey: opts.settingsKey, loadDataset: opts.loadDataset }, context);
   } catch (raw) {
-    if (opts.isCancelled?.()) return;
+    // A cancelled load's rejection (an AbortError, typically) is not a
+    // load failure: nothing is recorded or reported.
+    if (context.isCancelled()) return;
     const err = raw instanceof Error ? raw : new Error(String(raw));
     setDatasetLoadError(err);
     if (opts.onError) {
@@ -87,7 +125,7 @@ export async function syncSavedDataset(appDefault?: string, opts: SyncSavedDatas
     }
     return;
   }
-  if (opts.isCancelled?.()) return;
+  if (context.isCancelled()) return;
   setDatasetLoadError(null);
   if (ds) setCurrentDataset(ds);
 }

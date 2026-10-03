@@ -4,6 +4,11 @@
  * never a literal: `kqlDatasetId` throws on '' because `dataset=""` reads
  * nothing and reports success.
  *
+ * `source` is a function on purpose: call it when a query is built, never
+ * at module scope. DatasetProvider sets the default during its first
+ * render, after every module has been imported, so a module-scope
+ * `const Q = source() + ' | …'` reads '' and throws.
+ *
  * Put query builders beside this file (`src/data/queries.ts`), one exported
  * function per query, so tests can snapshot and guard each of them.
  */

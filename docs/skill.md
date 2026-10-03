@@ -331,6 +331,23 @@ through `onError` and `useDatasetLoadError()` (from
 `@criblio/app-utils/dataset`) — show it on the Settings page, or the
 user's saved choice is silently not the one in use.
 
+Build KQL lazily. `<DatasetProvider>` puts `defaultDataset` in the store
+during its first render, so anything that runs at import time — a
+module-scope `const QUERY = …` or a list of query emitters built when the
+module loads — reads `getCurrentDataset() === ''`, and `kqlDatasetId`
+throws ("dataset ID is empty — was KQL built at import time, before
+DatasetProvider set the default?"), blanking the page. Build queries in
+functions, effects or query builders called at fetch time. If something
+really needs the dataset at import time, call `setCurrentDataset()` at
+module scope in an entry module that is imported first.
+
+A custom `loadDataset` receives `{ signal, isCancelled }`. The provider
+cancels it on unmount, when the default or settings key changes, and in
+StrictMode's discarded first effect, and drops a cancelled result. If the
+loader does anything besides return the name (applying feature flags from
+the same settings read, say), check `isCancelled()` before each side
+effect or pass `signal` to the fetch.
+
 ### Graph stability
 When using d3-force or similar layout engines, compute a topology
 key from node IDs + link endpoints. Only recreate the simulation

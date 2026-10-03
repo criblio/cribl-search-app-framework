@@ -19,7 +19,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { DatasetProvider } from '../DatasetProvider.js';
-import { loadSavedDataset, syncSavedDataset } from '../dataset-settings.js';
+import { loadSavedDataset, syncSavedDataset, type DatasetLoadContext } from '../dataset-settings.js';
 import {
   getCurrentDataset,
   getDatasetLoadError,
@@ -186,5 +186,107 @@ describe('a KV failure is surfaced, and the fallback kept (syncSavedDataset, the
     );
     expect(html).toContain('child');
     expect(getCurrentDataset()).toBe('web_events');
+  });
+});
+
+describe('loadDataset receives cancellation (syncSavedDataset, the provider effect)', () => {
+  /** A loader whose read the test settles by hand, recording its context. */
+  function deferredLoader() {
+    let settle!: { resolve: (v: string | undefined) => void; reject: (e: unknown) => void };
+    const contexts: DatasetLoadContext[] = [];
+    const loader = (context: DatasetLoadContext) => {
+      contexts.push(context);
+      return new Promise<string | undefined>((resolve, reject) => {
+        settle = { resolve, reject };
+      });
+    };
+    return { loader, contexts, settle: () => settle };
+  }
+
+  it('the loader gets a live signal and isCancelled() while the load is current', async () => {
+    const { loader, contexts, settle } = deferredLoader();
+    const controller = new AbortController();
+    const done = syncSavedDataset('web_events', { loadDataset: loader, signal: controller.signal });
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0].signal).toBe(controller.signal);
+    expect(contexts[0].signal.aborted).toBe(false);
+    expect(contexts[0].isCancelled()).toBe(false);
+    settle().resolve('saved_ds');
+    await done;
+    expect(getCurrentDataset()).toBe('saved_ds');
+  });
+
+  it('abort during the read: the loader sees it, and its result is not applied', async () => {
+    setCurrentDataset('web_events');
+    const { loader, contexts, settle } = deferredLoader();
+    const controller = new AbortController();
+    const done = syncSavedDataset('web_events', { loadDataset: loader, signal: controller.signal });
+    controller.abort();
+    // What a loader with side effects checks before applying them.
+    expect(contexts[0].isCancelled()).toBe(true);
+    expect(contexts[0].signal.aborted).toBe(true);
+    settle().resolve('stale_ds');
+    await done;
+    expect(getCurrentDataset()).toBe('web_events');
+  });
+
+  it('a cancelled load\'s rejection (AbortError) is not reported as a load failure', async () => {
+    const { loader, settle } = deferredLoader();
+    const controller = new AbortController();
+    const onError = vi.fn();
+    const done = syncSavedDataset('web_events', { loadDataset: loader, signal: controller.signal, onError });
+    controller.abort();
+    settle().reject(new DOMException('aborted', 'AbortError'));
+    await done;
+    expect(onError).not.toHaveBeenCalled();
+    expect(getDatasetLoadError()).toBeNull();
+  });
+
+  it('a cancelled load does not clear an earlier recorded error either', async () => {
+    const earlier = new Error('earlier');
+    setDatasetLoadError(earlier);
+    const { loader, settle } = deferredLoader();
+    const controller = new AbortController();
+    const done = syncSavedDataset('web_events', { loadDataset: loader, signal: controller.signal });
+    controller.abort();
+    settle().resolve('stale_ds');
+    await done;
+    expect(getDatasetLoadError()).toBe(earlier);
+  });
+
+  it('isCancelled option still cancels, and the loader sees it through its context', async () => {
+    let cancelled = false;
+    const { loader, contexts, settle } = deferredLoader();
+    const done = syncSavedDataset('web_events', { loadDataset: loader, isCancelled: () => cancelled });
+    cancelled = true;
+    expect(contexts[0].isCancelled()).toBe(true);
+    settle().resolve('stale_ds');
+    await done;
+    expect(getCurrentDataset()).toBe('');
+  });
+
+  it('with no signal, the loader still gets a context that is never cancelled', async () => {
+    const { loader, contexts, settle } = deferredLoader();
+    const done = syncSavedDataset(undefined, { loadDataset: loader });
+    expect(contexts[0].signal).toBeInstanceOf(AbortSignal);
+    expect(contexts[0].isCancelled()).toBe(false);
+    settle().resolve(' mine ');
+    await done;
+    expect(getCurrentDataset()).toBe('mine');
+  });
+
+  it('a zero-argument loader (the 0.12.4 shape) still works', async () => {
+    const legacy: () => Promise<string | undefined> = async () => 'legacy_ds';
+    await syncSavedDataset('web_events', { loadDataset: legacy });
+    expect(getCurrentDataset()).toBe('legacy_ds');
+    await expect(loadSavedDataset('web_events', { loadDataset: legacy })).resolves.toBe('legacy_ds');
+  });
+
+  it('loadSavedDataset hands its context to the loader', async () => {
+    const controller = new AbortController();
+    const context: DatasetLoadContext = { signal: controller.signal, isCancelled: () => controller.signal.aborted };
+    const loader = vi.fn(async (_ctx: DatasetLoadContext) => 'x');
+    await loadSavedDataset(undefined, { loadDataset: loader }, context);
+    expect(loader).toHaveBeenCalledWith(context);
   });
 });

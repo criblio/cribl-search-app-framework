@@ -28,7 +28,14 @@ import { createStore } from './create-store.js';
 
 const store = createStore('');
 
-/** Current active dataset name. Empty string until set. */
+/**
+ * Current active dataset name. Empty string until set — and it is still
+ * empty at import time: `<DatasetProvider>` applies `defaultDataset`
+ * during its first render. Read it when a query is built (in a function or
+ * effect), never in a module-scope constant, or `kqlDatasetId('')` throws.
+ * An app that needs a value at import time calls `setCurrentDataset()` at
+ * module scope in an entry module imported before any KQL-building module.
+ */
 export function getCurrentDataset(): string {
   return store.get();
 }
