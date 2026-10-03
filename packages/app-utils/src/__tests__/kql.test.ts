@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ANY_DATASET,
+  EMPTY_DATASET_ID_MESSAGE,
   KqlSafetyError,
   assertKqlPredicate,
   assertReadOnlyKql,
@@ -21,6 +22,23 @@ describe('KQL safety boundary', () => {
     'rejects unsafe dataset ID %j',
     (value) => expect(() => kqlDatasetId(value)).toThrow(KqlSafetyError),
   );
+
+  it.each(['', '   '])('an empty dataset ID (%j) explains the import-time cause', (value) => {
+    let thrown: unknown;
+    try {
+      kqlDatasetId(value);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(KqlSafetyError);
+    expect((thrown as Error).name).toBe('KqlSafetyError');
+    expect((thrown as Error).message).toBe(EMPTY_DATASET_ID_MESSAGE);
+    expect((thrown as Error).message).toMatch(/dataset ID is empty — was KQL built at import time, before DatasetProvider set the default\?/);
+  });
+
+  it('an unsafe non-empty dataset ID keeps its original message', () => {
+    expect(() => kqlDatasetId('a b')).toThrow('dataset ID contains unsupported characters');
+  });
 
   it('accepts conservative field keys and rejects bracket injection', () => {
     expect(kqlBracketField('resource.service/name')).toBe("['resource.service/name']");

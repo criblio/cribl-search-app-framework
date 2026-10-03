@@ -27,7 +27,17 @@
  *
  * The saved value is the `dataset` field at KV key `settings`; an app
  * whose settings live elsewhere passes `settingsKey`, or `loadDataset` for
- * a read of its own.
+ * a read of its own. `loadDataset` gets `{ signal, isCancelled }`: the
+ * load is aborted on unmount or a key change (and in StrictMode's
+ * discarded effect), and a cancelled load's result is never applied.
+ *
+ * The default lands at RENDER time, so nothing that runs at IMPORT time
+ * can see it: a module-scope query such as
+ * `const q = 'dataset=' + kqlDatasetId(getCurrentDataset())` reads `''`
+ * and `kqlDatasetId` throws, which blanks the page. Build KQL lazily (in
+ * a function, effect or query builder), or set the default with
+ * `setCurrentDataset()` at module scope in an entry module imported
+ * before anything that builds KQL.
  *
  * Most apps will pair this with `<Outlet key={dataset} />` in their
  * shell so route subtrees fully remount when the dataset changes —
@@ -35,8 +45,10 @@
  */
 
 import { useEffect, useRef, type ReactNode } from 'react';
-import { DATASET_LOAD_WARNING, syncSavedDataset } from './dataset-settings.js';
+import { DATASET_LOAD_WARNING, syncSavedDataset, type DatasetLoader } from './dataset-settings.js';
 import { getCurrentDataset, setCurrentDataset } from './dataset.js';
+
+export type { DatasetLoadContext, DatasetLoader } from './dataset-settings.js';
 
 export interface DatasetProviderProps {
   /** Fallback dataset name to apply if no settings are saved. */
@@ -51,8 +63,16 @@ export interface DatasetProviderProps {
   /** Custom saved-dataset read; wins over `settingsKey`. Resolve
    * `undefined` for nothing saved, reject when the read failed. Like
    * `onError`, not a dependency of the load: an inline arrow does not
-   * re-trigger it. */
-  loadDataset?: () => Promise<string | undefined | null>;
+   * re-trigger it.
+   *
+   * It receives `{ signal, isCancelled }`. The load is cancelled on
+   * unmount, when `defaultDataset`/`settingsKey` changes, and in
+   * StrictMode's discarded first effect; a cancelled load's result or
+   * error is dropped. A loader that does more than return the name (APM
+   * applies feature flags from the same read) must check `isCancelled()`
+   * before each side effect, or pass `signal` to its fetch. A loader that
+   * ignores the argument still works. */
+  loadDataset?: DatasetLoader;
   children: ReactNode;
 }
 
@@ -75,11 +95,11 @@ export function DatasetProvider({ defaultDataset, onError, settingsKey, loadData
   }
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     void syncSavedDataset(defaultDataset, {
-      isCancelled: () => cancelled,
+      signal: controller.signal,
       settingsKey,
-      loadDataset: hasLoader ? () => (loadDatasetRef.current ?? (async () => undefined))() : undefined,
+      loadDataset: hasLoader ? (context) => (loadDatasetRef.current ?? (async () => undefined))(context) : undefined,
       // Read through the ref at failure time, so the latest prop is used.
       onError: (err) => {
         const report = onErrorRef.current;
@@ -88,7 +108,7 @@ export function DatasetProvider({ defaultDataset, onError, settingsKey, loadData
       },
     });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [defaultDataset, settingsKey, hasLoader]);
 

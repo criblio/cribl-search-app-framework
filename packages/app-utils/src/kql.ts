@@ -11,9 +11,28 @@ const SAFE_ID = /^[A-Za-z0-9_-]+$/;
 const SAFE_FIELD_KEY = /^[A-Za-z0-9_.:/@-]+$/;
 const RELATIVE_TIME = /^-\d+(?:s|m|h|d|w)$/;
 
+/** The `kqlDatasetId('')` message. An empty id is almost always the
+ * current-dataset store read before anything set it: KQL built at module
+ * scope runs at import time, before `<DatasetProvider>` applies its
+ * `defaultDataset` during render. */
+export const EMPTY_DATASET_ID_MESSAGE =
+  'dataset ID is empty — was KQL built at import time, before DatasetProvider set the default? '
+  + 'Build queries lazily (in a function or effect), or call setCurrentDataset() in an entry module imported first.';
+
+/**
+ * Validate a dataset id for interpolation into `dataset="…"`. Throws
+ * `KqlSafetyError` for an unsafe id, and for an empty one with
+ * `EMPTY_DATASET_ID_MESSAGE` — `dataset=""` reads nothing and reports
+ * success, so it is never passed through.
+ *
+ * Call it when the query is built, not at import time: a module-scope
+ * `const q = "dataset=" + kqlDatasetId(getCurrentDataset())` runs
+ * before `<DatasetProvider>` has set the default and throws.
+ */
 export function kqlDatasetId(value: string): string {
   const id = value.trim();
-  if (!id || id.length > 128 || !SAFE_ID.test(id)) {
+  if (!id) throw new KqlSafetyError(EMPTY_DATASET_ID_MESSAGE);
+  if (id.length > 128 || !SAFE_ID.test(id)) {
     throw new KqlSafetyError('dataset ID contains unsupported characters');
   }
   return id;

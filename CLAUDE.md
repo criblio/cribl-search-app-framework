@@ -370,6 +370,20 @@ Every failure these exist for reported success in every API layer.
   saved ⇒ the app default. The saved value is `dataset` at KV key
   `settings`; `settingsKey` reads the app's own key, `loadDataset` replaces
   the read (read through a ref, like `onError`)
+- `loadDataset({ signal, isCancelled })` — the load is aborted on unmount,
+  on a `defaultDataset`/`settingsKey` change, and in StrictMode's discarded
+  first effect; a cancelled load's result or error is dropped. A loader
+  with side effects of its own (APM applies feature flags from the same
+  read) checks `isCancelled()` before each one, or passes `signal` to its
+  fetch. A zero-argument loader still type-checks and works
+- **Never build KQL at import time.** The default is applied during the
+  provider's first render, so a module-scope constant that calls
+  `kqlDatasetId(getCurrentDataset())` (APM's MetricsBackfillPanel built its
+  emitters this way) sees `''` and throws `KqlSafetyError` ("dataset ID is
+  empty — was KQL built at import time…"), blanking the page. Build
+  queries in functions/effects (the skeleton's `source()` is a function for
+  this reason), or call `setCurrentDataset()` at module scope in an entry
+  module imported before any KQL-building module
 - A failed KV read keeps the app default but is not silent: it lands in
   `useDatasetLoadError()` / `getDatasetLoadError()` /
   `subscribeDatasetLoadError` (`/dataset`), goes to `onError(err: Error)`,
