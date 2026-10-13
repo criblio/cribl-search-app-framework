@@ -384,6 +384,12 @@ Every failure these exist for reported success in every API layer.
   queries in functions/effects (the skeleton's `source()` is a function for
   this reason), or call `setCurrentDataset()` at module scope in an entry
   module imported before any KQL-building module
+- **The store holds a Search dataset, never a metrics one.** Metrics calls
+  (`queryRange`, `queryInstant`, `runMetricsQuery`) omit `dataset` to use
+  `METRICS_DATASET`, or pass a metrics dataset id. Passing the current
+  Search dataset rejects with `MetricsQueryError` code `wrong-dataset`
+  before any request (0.12.6; a generated dashboard passed `useDataset()`'s
+  `otel` and the endpoint's error did not name the cause)
 - A failed KV read keeps the app default but is not silent: it lands in
   `useDatasetLoadError()` / `getDatasetLoadError()` /
   `subscribeDatasetLoadError` (`/dataset`), goes to `onError(err: Error)`,

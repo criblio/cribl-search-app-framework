@@ -43,8 +43,14 @@ an incorrect result shape while the bundle still builds. Test a populated
 instant result and range result through those adapters before building more
 widgets. Treat a failed request separately from a successful empty result.
 
+`dataset` is a metrics dataset id; omit it to use `METRICS_DATASET`
+(`metrics`). Never pass the app's Search dataset from `useDataset()` or
+`getCurrentDataset()`: Search and metrics datasets are separate namespaces,
+and since 0.12.6 that value rejects with code `wrong-dataset` before any
+request is sent.
+
 `MetricsQueryError.code` distinguishes `query-failed`, `cancelled`,
-`invalid-response` and `incomplete-response`. HTTP/transport errors and aborts
+`invalid-response`, `incomplete-response` and `wrong-dataset`. HTTP/transport errors and aborts
 also reject the request. A transport or response failure does not establish
 that the PromQL is wrong, or that a metric does not exist.
 

@@ -25,8 +25,7 @@
 
 import { useSyncExternalStore } from 'react';
 import { createStore } from './create-store.js';
-
-const store = createStore('');
+import { currentDatasetStore as store } from './current-dataset.js';
 
 /**
  * Current active dataset name. Empty string until set — and it is still

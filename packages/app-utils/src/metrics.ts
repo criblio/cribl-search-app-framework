@@ -33,6 +33,7 @@
 
 import { apiUrl } from './search.js';
 import { browserMetricsCatalog, type MetricsCatalog } from './metrics-catalog.js';
+import { currentDatasetStore } from './current-dataset.js';
 
 /** Default dataset for metrics queries. */
 export const METRICS_DATASET = 'metrics';
@@ -44,7 +45,13 @@ export interface MetricsQueryOptions {
   latest?: string | number;
   /** Range-query step in seconds. Omit for an instant query. */
   step?: number;
-  /** Override the metrics dataset. */
+  /**
+   * Override the metrics dataset (default {@link METRICS_DATASET}). This is
+   * a metrics-store dataset id, never the app's Search dataset from
+   * `useDataset()` / `getCurrentDataset()`: passing that one rejects with
+   * `MetricsQueryError` code `wrong-dataset` before any request is sent.
+   * Most apps omit it.
+   */
   dataset?: string;
   signal?: AbortSignal;
   /**
@@ -89,7 +96,12 @@ export interface MetricSeries {
 /** Distinguishes a failed query from a broken response or cancellation. */
 export class MetricsQueryError extends Error {
   constructor(
-    readonly code: 'query-failed' | 'invalid-response' | 'incomplete-response' | 'cancelled',
+    readonly code:
+      | 'query-failed'
+      | 'invalid-response'
+      | 'incomplete-response'
+      | 'cancelled'
+      | 'wrong-dataset',
     message: string,
   ) {
     super(message);
@@ -147,8 +159,31 @@ export const defaultMetricsTransport: MetricsTransport = async (query, opts) => 
   return text;
 };
 
+/**
+ * Reject the app's Search dataset as a metrics dataset.
+ *
+ * A generated dashboard (2026-10-13) passed `useDataset()` — the app's
+ * configured Search dataset, `otel` — into `queryRange`. The metrics
+ * endpoint then failed with an error that did not name the cause, while the
+ * same PromQL succeeded with no `dataset`. Search and metrics datasets are
+ * different namespaces, so the Search dataset is never the right value here;
+ * fail before the request with an error that says what to do instead.
+ */
+function assertNotSearchDataset(dataset: string | undefined): void {
+  if (!dataset || dataset === METRICS_DATASET) return;
+  const search = currentDatasetStore.get();
+  if (!search || dataset !== search) return;
+  throw new MetricsQueryError(
+    'wrong-dataset',
+    `Metrics query was given the app's Search dataset "${dataset}" (from useDataset()/getCurrentDataset()). ` +
+      `Metrics queries read a metrics dataset: omit \`dataset\` to use the default "${METRICS_DATASET}", ` +
+      'or pass a metrics dataset id.',
+  );
+}
+
 async function fetchRows(query: string, opts: MetricsQueryOptions = {}): Promise<RawRow[]> {
   opts.signal?.throwIfAborted();
+  assertNotSearchDataset(opts.dataset);
   const transport = opts.transport ?? defaultMetricsTransport;
   const text = await transport(query, opts);
   opts.signal?.throwIfAborted();
